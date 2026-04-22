@@ -105,15 +105,15 @@ Observed on this machine:
 
 ```text
 ❯ atomic-queue stress --duration 3s --threads 1000
-stress duration: 3.003s
+stress duration: 3.005s
 threads: 1000 (500 producers, 500 consumers)
 channels: stress-a, stress-b, stress-c, stress-d
-messages pushed: 1195276
-messages served: 1191044
+messages pushed: 1204390
+messages served: 1202933
 pop timeouts: 0
 client failures: 0
-push rate: 397987.25 msg/s
-serve rate: 396578.14 msg/s
+push rate: 400818.12 msg/s
+serve rate: 400333.23 msg/s
 ```
 
 ## ☰ Language Examples

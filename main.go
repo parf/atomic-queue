@@ -318,6 +318,39 @@ func (c *rpcClient) Do(req request) (response, error) {
 	return resp, nil
 }
 
+func (c *rpcClient) Push(channel string, payload []byte) error {
+	if err := writeRequest(c.w, request{
+		Op:       "push",
+		Channels: []string{channel},
+		Payload:  payload,
+	}); err != nil {
+		return fmt.Errorf("send push: %w", err)
+	}
+	resp, err := readResponse(c.r)
+	if err != nil {
+		return fmt.Errorf("read push response: %w", err)
+	}
+	if !resp.OK {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
+func (c *rpcClient) Pop(channels []string, timeoutMS int64) (response, error) {
+	if err := writeRequest(c.w, request{
+		Op:        "pop",
+		Channels:  channels,
+		TimeoutMS: timeoutMS,
+	}); err != nil {
+		return response{}, fmt.Errorf("send pop: %w", err)
+	}
+	resp, err := readResponse(c.r)
+	if err != nil {
+		return response{}, fmt.Errorf("read pop response: %w", err)
+	}
+	return resp, nil
+}
+
 func (c *rpcClient) Close() error {
 	return c.conn.Close()
 }

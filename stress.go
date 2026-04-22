@@ -78,19 +78,11 @@ func runStress(args []string) int {
 			seq := 0
 			for ctx.Err() == nil {
 				channel := cfg.channels[rng.Intn(len(cfg.channels))]
-				resp, err := client.Do(request{
-					Op:       "push",
-					Channels: []string{channel},
-					Payload:  makeStressPayload(workerID, seq, cfg.payloadLen, rng),
-				})
+				err := client.Push(channel, makeStressPayload(workerID, seq, cfg.payloadLen, rng))
 				seq++
 				if err != nil {
 					failures.Add(1)
 					return
-				}
-				if !resp.OK {
-					failures.Add(1)
-					continue
 				}
 				pushed.Add(1)
 			}
@@ -109,11 +101,7 @@ func runStress(args []string) int {
 			defer client.Close()
 
 			for ctx.Err() == nil {
-				resp, err := client.Do(request{
-					Op:        "pop",
-					Channels:  cfg.channels,
-					TimeoutMS: cfg.popTimeout.Milliseconds(),
-				})
+				resp, err := client.Pop(cfg.channels, cfg.popTimeout.Milliseconds())
 				if err != nil {
 					failures.Add(1)
 					return

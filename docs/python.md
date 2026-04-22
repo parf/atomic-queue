@@ -57,15 +57,34 @@ INSTANCES=100 DURATION=5 PUBLISHERS=1 CONSUMERS=1 PARALLEL_JOBS=100 ./scripts/py
 ```text
 ❯ ATOMIC_QUEUE_SOCKET=/tmp/atomic-queue.sock ATOMIC_QUEUE_BIN=./atomic-queue \
   python3 ./examples/python/stress_test.py --duration 3 --publishers 20 --consumers 20
-stress duration: 2.952s
+stress duration: 1.951s
 threads: 40 (20 producers, 20 consumers)
 channels: stress-a, stress-b, stress-c, stress-d
-messages pushed: 24691
-messages served: 20067
+messages pushed: 20400
+messages served: 14595
 pop timeouts: 0
 client failures: 0
-push rate: 8363.18 msg/s
-serve rate: 6796.97 msg/s
+push rate: 10454.24 msg/s
+serve rate: 7479.40 msg/s
 ```
 
-This path is stdlib-only and easy to embed, but it is much slower than the Go binary and slower than the PHP socket client under load.
+GNU `parallel`, `100` instances, `1` producer and `1` consumer per instance:
+
+```text
+❯ ATOMIC_QUEUE_SOCKET=/tmp/atomic-queue.sock ATOMIC_QUEUE_BIN=./atomic-queue \
+  INSTANCES=100 DURATION=2 PUBLISHERS=1 CONSUMERS=1 PARALLEL_JOBS=100 ./scripts/python-parallel-stress.sh
+stress duration: 3.483s
+workers: 200 (100 producers, 100 consumers) across 100 instances
+channels: stress-a, stress-b, stress-c, stress-d
+messages pushed: 496378
+messages served: 494401
+pop timeouts: 0
+client failures: 0
+push rate: 142514.50 msg/s
+serve rate: 141946.88 msg/s
+```
+
+Python note:
+
+- The single-process threaded stress example is GIL-bound and does a lot of small Python-level socket/frame work, so it does not scale like the Go or PHP runners.
+- If you want higher Python-side throughput, run many processes with GNU `parallel` or another process-based launcher instead of piling on more threads in one interpreter.
