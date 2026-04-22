@@ -6,6 +6,7 @@ Python support is stdlib-only: one small client library and one standalone stres
 
 - Client library: [`examples/python/atomic_queue.py`](../examples/python/atomic_queue.py)
 - Stress example: [`examples/python/stress_test.py`](../examples/python/stress_test.py)
+- Parallel wrapper: [`scripts/python-parallel-stress.sh`](../scripts/python-parallel-stress.sh)
 
 ## Example
 
@@ -37,6 +38,18 @@ JSON output mode:
 
 ```bash
 python3 ./examples/python/stress_test.py --duration 10 --publishers 50 --consumers 50 --format json
+```
+
+Run `100` Python stress instances with GNU `parallel`:
+
+```bash
+./scripts/python-parallel-stress.sh
+```
+
+Override with env vars:
+
+```bash
+INSTANCES=100 DURATION=5 PUBLISHERS=1 CONSUMERS=1 PARALLEL_JOBS=100 ./scripts/python-parallel-stress.sh
 ```
 
 ## Performance On This Machine
