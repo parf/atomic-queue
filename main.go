@@ -401,9 +401,33 @@ func socketPathUsable(path string) bool {
 	case err == nil:
 		return info.Mode()&os.ModeSocket != 0
 	case errors.Is(err, os.ErrNotExist):
-		return syscall.Access(filepath.Dir(path), accessWrite) == nil
+		return dirCreatable(filepath.Dir(path))
 	default:
 		return false
+	}
+}
+
+func dirCreatable(dir string) bool {
+	for {
+		if dir == "" {
+			return false
+		}
+		info, err := os.Stat(dir)
+		switch {
+		case err == nil:
+			if !info.IsDir() {
+				return false
+			}
+			return syscall.Access(dir, accessWrite) == nil
+		case errors.Is(err, os.ErrNotExist):
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				return false
+			}
+			dir = parent
+		default:
+			return false
+		}
 	}
 }
 
