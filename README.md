@@ -2,6 +2,8 @@
 
 `atomic-queue` is a small local queue with one binary and no external dependencies.
 
+Fast enough for aggressive local IPC workloads: on this machine it sustains roughly `400k+` messages per second in the built-in stress test.
+
 - Multiple producers can push to a named channel.
 - Multiple consumers can pop from one or more channels.
 - `pop` can block with a timeout.
@@ -73,8 +75,6 @@ Run the built-in stress test for 10 seconds with 1000 threads:
 ```bash
 ./atomic-queue stress --duration 10s --threads 1000
 ```
-
-Fast enough for aggressive local IPC workloads: on this machine it sustains roughly `400k+` messages per second in the built-in stress test.
 
 Use custom channels and timeouts:
 
