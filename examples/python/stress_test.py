@@ -58,8 +58,8 @@ def main() -> int:
     channels = [value.strip() for value in args.channels.split(",") if value.strip()]
     publishers, consumers = worker_counts(args)
     end_time = time.monotonic() + args.duration
-    counters = Counters()
-    lock = threading.Lock()
+    results: list[Counters] = []
+    results_lock = threading.Lock()
 
     warm = AtomicQueueClient(args.socket)
     try:
@@ -72,6 +72,7 @@ def main() -> int:
 
     def producer(worker_id: int) -> None:
         client = AtomicQueueClient(args.socket)
+        local = Counters()
         seq = 0
         next_channel = worker_id % len(channels)
         try:
@@ -79,30 +80,30 @@ def main() -> int:
                 client.push(channels[next_channel], make_payload(worker_id, seq, args.payload_size))
                 next_channel = (next_channel + 1) % len(channels)
                 seq += 1
-                with lock:
-                    counters.pushed += 1
+                local.pushed += 1
         except AtomicQueueError:
-            with lock:
-                counters.failures += 1
+            local.failures += 1
         finally:
             client.close()
+            with results_lock:
+                results.append(local)
 
     def consumer() -> None:
         client = AtomicQueueClient(args.socket)
+        local = Counters()
         try:
             while time.monotonic() < end_time:
                 try:
                     client.pop(channels, args.pop_timeout_ms)
-                    with lock:
-                        counters.served += 1
+                    local.served += 1
                 except AtomicQueueTimeout:
-                    with lock:
-                        counters.timeouts += 1
+                    local.timeouts += 1
         except AtomicQueueError:
-            with lock:
-                counters.failures += 1
+            local.failures += 1
         finally:
             client.close()
+            with results_lock:
+                results.append(local)
 
     started = time.monotonic()
     threads: list[threading.Thread] = []
@@ -116,6 +117,13 @@ def main() -> int:
         thread.join()
 
     elapsed = max(time.monotonic() - started, 1e-9)
+    counters = Counters()
+    for item in results:
+        counters.pushed += item.pushed
+        counters.served += item.served
+        counters.timeouts += item.timeouts
+        counters.failures += item.failures
+
     result = {
         "duration_seconds": elapsed,
         "threads": publishers + consumers,
