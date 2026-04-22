@@ -1,6 +1,6 @@
 # ✦ Atomic local message queue for Linux
 
-Fast enough for aggressive local IPC workloads: on this machine the built-in stress test sustains roughly `400k+` messages per second.
+Fast enough for aggressive local IPC workloads: on this machine the built-in stress test sustained roughly `150k+` messages per second in the current build.
 
 `atomic-queue` is a small Linux-only local queue with one binary and no external dependencies.
 
@@ -105,15 +105,15 @@ Observed on this machine:
 
 ```text
 ❯ atomic-queue stress --duration 3s --threads 1000
-stress duration: 3.005s
+stress duration: 3.036s
 threads: 1000 (500 producers, 500 consumers)
 channels: stress-a, stress-b, stress-c, stress-d
-messages pushed: 1208886
-messages served: 1207405
+messages pushed: 464652
+messages served: 460088
 pop timeouts: 0
 client failures: 0
-push rate: 402328.84 msg/s
-serve rate: 401835.95 msg/s
+push rate: 153029.41 msg/s
+serve rate: 151526.29 msg/s
 ```
 
 ## ☰ Language Examples

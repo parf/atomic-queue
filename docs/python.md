@@ -38,3 +38,21 @@ JSON output mode:
 ```bash
 python3 ./examples/python/stress_test.py --duration 10 --publishers 50 --consumers 50 --format json
 ```
+
+## Performance On This Machine
+
+```text
+❯ ATOMIC_QUEUE_SOCKET=/tmp/atomic-queue.sock ATOMIC_QUEUE_BIN=./atomic-queue \
+  python3 ./examples/python/stress_test.py --duration 3 --publishers 20 --consumers 20
+stress duration: 2.952s
+threads: 40 (20 producers, 20 consumers)
+channels: stress-a, stress-b, stress-c, stress-d
+messages pushed: 24691
+messages served: 20067
+pop timeouts: 0
+client failures: 0
+push rate: 8363.18 msg/s
+serve rate: 6796.97 msg/s
+```
+
+This path is stdlib-only and easy to embed, but it is much slower than the Go binary and slower than the PHP socket client under load.

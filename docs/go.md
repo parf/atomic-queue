@@ -40,3 +40,38 @@ If you already depend on Go, the built-in binary stress runner is still the fast
 ```bash
 atomic-queue stress --duration 10s --threads 1000
 ```
+
+## Performance On This Machine
+
+Built-in binary stress command:
+
+```text
+❯ ./atomic-queue stress --duration 3s --threads 1000
+stress duration: 3.036s
+threads: 1000 (500 producers, 500 consumers)
+channels: stress-a, stress-b, stress-c, stress-d
+messages pushed: 464652
+messages served: 460088
+pop timeouts: 0
+client failures: 0
+push rate: 153029.41 msg/s
+serve rate: 151526.29 msg/s
+```
+
+Standalone Go stress example:
+
+```text
+❯ ATOMIC_QUEUE_SOCKET=/tmp/atomic-queue.sock ATOMIC_QUEUE_BIN=./atomic-queue \
+  go run ./examples/go/stress --duration 3s --publishers 50 --consumers 50
+stress duration: 3.020s
+threads: 100 (50 producers, 50 consumers)
+channels: stress-a, stress-b, stress-c, stress-d
+messages pushed: 143766
+messages served: 141728
+pop timeouts: 0
+client failures: 0
+push rate: 47598.17 msg/s
+serve rate: 46923.42 msg/s
+```
+
+The standalone example is useful for integration reference, but the built-in `atomic-queue stress` command is materially faster and should be used for real benchmarking.

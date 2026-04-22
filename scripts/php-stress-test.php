@@ -113,9 +113,13 @@ function build_php_stress_payload(int $workerId, int $seq, int $payloadSize): st
     if (strlen($prefix) >= $payloadSize) {
         return substr($prefix, 0, $payloadSize);
     }
-    $bodyBytes = random_bytes((int) ceil(($payloadSize - strlen($prefix)) / 2));
-    $body = substr(bin2hex($bodyBytes), 0, $payloadSize - strlen($prefix));
-    return $prefix . $body;
+
+    $payload = str_pad($prefix, $payloadSize, '0');
+    $hex = '0123456789abcdef';
+    for ($i = strlen($prefix); $i < $payloadSize; $i++) {
+        $payload[$i] = $hex[($workerId + $seq + $i) & 0x0f];
+    }
+    return $payload;
 }
 
 function spawn_php_stress_worker(string $role, int $workerId, array $cfg, string $socketPath, int $deadlineNs)
@@ -137,9 +141,14 @@ function spawn_php_stress_worker(string $role, int $workerId, array $cfg, string
             $client = new AtomicQueueClient($socketPath);
             $channels = $cfg['channels'];
             $seq = 0;
+            $nextChannel = $workerId % count($channels);
             while (hrtime(true) < $deadlineNs) {
                 if ($role === 'producer') {
-                    $channel = $channels[array_rand($channels)];
+                    $channel = $channels[$nextChannel];
+                    $nextChannel++;
+                    if ($nextChannel === count($channels)) {
+                        $nextChannel = 0;
+                    }
                     $client->push($channel, build_php_stress_payload($workerId, $seq, $cfg['payload_size']));
                     $counts['pushed']++;
                     $seq++;
