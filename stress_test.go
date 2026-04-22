@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"math/rand"
+	"testing"
+)
 
 func TestParseStressArgsExplicitWorkers(t *testing.T) {
 	cfg, err := parseStressArgs([]string{
@@ -24,7 +27,8 @@ func TestParseStressArgsExplicitWorkers(t *testing.T) {
 }
 
 func TestMakeStressPayloadSize(t *testing.T) {
-	payload := makeStressPayload(12, 34, 128)
+	rng := rand.New(rand.NewSource(1))
+	payload := makeStressPayload(12, 34, 128, rng)
 	if len(payload) != 128 {
 		t.Fatalf("unexpected payload size %d", len(payload))
 	}

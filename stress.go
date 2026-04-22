@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"strconv"
 	"strings"
@@ -72,18 +74,14 @@ func runStress(args []string) int {
 			}
 			defer client.Close()
 
+			rng := rand.New(rand.NewSource(time.Now().UnixNano() + int64(workerID+1)))
 			seq := 0
-			nextChannel := workerID % len(cfg.channels)
 			for ctx.Err() == nil {
-				channel := cfg.channels[nextChannel]
-				nextChannel++
-				if nextChannel == len(cfg.channels) {
-					nextChannel = 0
-				}
+				channel := cfg.channels[rng.Intn(len(cfg.channels))]
 				resp, err := client.Do(request{
 					Op:       "push",
 					Channels: []string{channel},
-					Payload:  makeStressPayload(workerID, seq, cfg.payloadLen),
+					Payload:  makeStressPayload(workerID, seq, cfg.payloadLen, rng),
 				})
 				seq++
 				if err != nil {
@@ -423,17 +421,16 @@ func splitCSV(value string) []string {
 	return out
 }
 
-func makeStressPayload(workerID, seq, size int) []byte {
+func makeStressPayload(workerID, seq, size int, rng *rand.Rand) []byte {
 	prefix := fmt.Sprintf("worker=%d seq=%d ", workerID, seq)
 	if len(prefix) >= size {
 		return []byte(prefix[:size])
 	}
-	payload := make([]byte, size)
-	copy(payload, prefix)
-	fill := payload[len(prefix):]
-	const alphabet = "0123456789abcdef"
-	for i := range fill {
-		fill[i] = alphabet[(workerID+seq+i)&0x0f]
+	raw := make([]byte, (size-len(prefix)+1)/2)
+	_, _ = rng.Read(raw)
+	body := hex.EncodeToString(raw)
+	if len(body) > size-len(prefix) {
+		body = body[:size-len(prefix)]
 	}
-	return payload
+	return []byte(prefix + body)
 }
