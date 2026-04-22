@@ -31,17 +31,17 @@ const (
 var channelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 type request struct {
-	Op        string   `json:"op"`
-	Channels  []string `json:"channels,omitempty"`
-	Payload   []byte   `json:"payload,omitempty"`
-	TimeoutMS int64    `json:"timeout_ms,omitempty"`
+	Op        string
+	Channels  []string
+	Payload   []byte
+	TimeoutMS int64
 }
 
 type response struct {
-	OK      bool   `json:"ok"`
-	Channel string `json:"channel,omitempty"`
-	Payload []byte `json:"payload,omitempty"`
-	Error   string `json:"error,omitempty"`
+	OK      bool
+	Channel string
+	Payload []byte
+	Error   string
 }
 
 func main() {
@@ -441,7 +441,7 @@ func usageError(cmd string, err error) int {
 	case "serve":
 		fmt.Fprintln(os.Stderr, "usage: atomic-queue serve [--socket path]")
 	case "stress":
-		fmt.Fprintln(os.Stderr, "usage: atomic-queue stress [--socket path] [--duration 10s] [--threads 1000] [--channels a,b,c] [--pop-timeout 200ms] [--payload-size 128]")
+		fmt.Fprintln(os.Stderr, "usage: atomic-queue stress [--socket path] [--duration 10s] [--threads 1000] [--publishers n] [--consumers n] [--channels a,b,c] [--pop-timeout 200ms] [--payload-size 128] [--format text|json]")
 	}
 	return exitUsage
 }
@@ -472,6 +472,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  atomic-queue pop channel1 channel2 --timeout 1500ms")
 	fmt.Fprintln(w, "  atomic-queue serve")
 	fmt.Fprintln(w, "  atomic-queue stress --duration 10s --threads 1000")
+	fmt.Fprintln(w, "  atomic-queue stress --duration 10s --publishers 500 --consumers 500 --format json")
 	fmt.Fprintln(w, "")
 	fmt.Fprintf(w, "Default socket: %s\n", defaultSocketPath())
 	fmt.Fprintln(w, "Override socket: ATOMIC_QUEUE_SOCKET=/path/to.sock or --socket /path/to.sock")

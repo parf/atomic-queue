@@ -14,7 +14,7 @@ function php_stress_usage(): never
 {
     fwrite(STDERR, <<<TXT
 usage:
-  php-stress-test.php [--duration 10] [--workers 100] [--channels jobs,fast,slow] [--pop-timeout-ms 200] [--payload-size 128]
+  php-stress-test.php [--duration 10] [--workers 100] [--publishers 50] [--consumers 50] [--channels jobs,fast,slow] [--pop-timeout-ms 200] [--payload-size 128] [--format text|json]
 
 TXT);
     exit(64);
@@ -25,9 +25,12 @@ function parse_php_stress_args(array $args): array
     $cfg = [
         'duration' => 10,
         'workers' => 100,
+        'publishers' => null,
+        'consumers' => null,
         'channels' => ['stress-a', 'stress-b', 'stress-c', 'stress-d'],
         'pop_timeout_ms' => 200,
         'payload_size' => 128,
+        'format' => 'text',
     ];
 
     for ($i = 0; $i < count($args); $i++) {
@@ -44,6 +47,18 @@ function parse_php_stress_args(array $args): array
                     php_stress_usage();
                 }
                 $cfg['workers'] = max(1, (int) $args[++$i]);
+                break;
+            case '--publishers':
+                if (!isset($args[$i + 1])) {
+                    php_stress_usage();
+                }
+                $cfg['publishers'] = max(1, (int) $args[++$i]);
+                break;
+            case '--consumers':
+                if (!isset($args[$i + 1])) {
+                    php_stress_usage();
+                }
+                $cfg['consumers'] = max(1, (int) $args[++$i]);
                 break;
             case '--channels':
                 if (!isset($args[$i + 1])) {
@@ -63,6 +78,12 @@ function parse_php_stress_args(array $args): array
                 }
                 $cfg['payload_size'] = max(16, (int) $args[++$i]);
                 break;
+            case '--format':
+                if (!isset($args[$i + 1])) {
+                    php_stress_usage();
+                }
+                $cfg['format'] = $args[++$i];
+                break;
             default:
                 php_stress_usage();
         }
@@ -70,6 +91,17 @@ function parse_php_stress_args(array $args): array
 
     if ($cfg['channels'] === []) {
         $cfg['channels'] = ['stress-a'];
+    }
+
+    if ($cfg['publishers'] === null || $cfg['consumers'] === null) {
+        $cfg['publishers'] = max(1, intdiv($cfg['workers'], 2));
+        $cfg['consumers'] = max(1, $cfg['workers'] - $cfg['publishers']);
+    } else {
+        $cfg['workers'] = $cfg['publishers'] + $cfg['consumers'];
+    }
+
+    if ($cfg['format'] !== 'text' && $cfg['format'] !== 'json') {
+        php_stress_usage();
     }
 
     return $cfg;
@@ -150,8 +182,8 @@ unset($warm);
 $start = hrtime(true);
 $deadlineNs = $start + ($cfg['duration'] * 1_000_000_000);
 
-$producerCount = max(1, intdiv($cfg['workers'], 2));
-$consumerCount = max(1, $cfg['workers'] - $producerCount);
+$producerCount = (int) $cfg['publishers'];
+$consumerCount = (int) $cfg['consumers'];
 
 $children = [];
 for ($i = 0; $i < $producerCount; $i++) {
@@ -182,12 +214,31 @@ if ($elapsed <= 0) {
     $elapsed = 1.0;
 }
 
-printf("stress duration: %.3fs\n", $elapsed);
-printf("workers: %d (%d producers, %d consumers)\n", $cfg['workers'], $producerCount, $consumerCount);
-printf("channels: %s\n", implode(', ', $cfg['channels']));
-printf("messages pushed: %d\n", $totals['pushed']);
-printf("messages served: %d\n", $totals['served']);
-printf("pop timeouts: %d\n", $totals['timeouts']);
-printf("client failures: %d\n", $totals['failures']);
-printf("push rate: %.2f msg/s\n", $totals['pushed'] / $elapsed);
-printf("serve rate: %.2f msg/s\n", $totals['served'] / $elapsed);
+$result = [
+    'duration_seconds' => $elapsed,
+    'workers' => (int) $cfg['workers'],
+    'publishers' => $producerCount,
+    'consumers' => $consumerCount,
+    'channels' => array_values($cfg['channels']),
+    'messages_pushed' => $totals['pushed'],
+    'messages_served' => $totals['served'],
+    'pop_timeouts' => $totals['timeouts'],
+    'client_failures' => $totals['failures'],
+    'push_rate' => $totals['pushed'] / $elapsed,
+    'serve_rate' => $totals['served'] / $elapsed,
+];
+
+if ($cfg['format'] === 'json') {
+    echo json_encode($result, JSON_THROW_ON_ERROR) . PHP_EOL;
+    exit(0);
+}
+
+printf("stress duration: %.3fs\n", $result['duration_seconds']);
+printf("workers: %d (%d producers, %d consumers)\n", $result['workers'], $result['publishers'], $result['consumers']);
+printf("channels: %s\n", implode(', ', $result['channels']));
+printf("messages pushed: %d\n", $result['messages_pushed']);
+printf("messages served: %d\n", $result['messages_served']);
+printf("pop timeouts: %d\n", $result['pop_timeouts']);
+printf("client failures: %d\n", $result['client_failures']);
+printf("push rate: %.2f msg/s\n", $result['push_rate']);
+printf("serve rate: %.2f msg/s\n", $result['serve_rate']);
