@@ -13,7 +13,7 @@ var ErrTimeout = errors.New("timeout")
 
 type delivery struct {
 	Channel string `json:"channel"`
-	Payload string `json:"payload"`
+	Payload []byte `json:"payload"`
 }
 
 type waiter struct {
@@ -23,19 +23,19 @@ type waiter struct {
 
 type Broker struct {
 	mu       sync.Mutex
-	queues   map[string][]string
+	queues   map[string][][]byte
 	waiters  []*waiter
 	maxBytes int
 }
 
 func NewBroker(maxBytes int) *Broker {
 	return &Broker{
-		queues:   make(map[string][]string),
+		queues:   make(map[string][][]byte),
 		maxBytes: maxBytes,
 	}
 }
 
-func (b *Broker) Push(channel, payload string) error {
+func (b *Broker) Push(channel string, payload []byte) error {
 	if err := validateChannel(channel); err != nil {
 		return err
 	}
@@ -51,11 +51,11 @@ func (b *Broker) Push(channel, payload string) error {
 
 		b.waiters = append(b.waiters[:i], b.waiters[i+1:]...)
 		b.mu.Unlock()
-		w.reply <- delivery{Channel: channel, Payload: payload}
+		w.reply <- delivery{Channel: channel, Payload: slices.Clone(payload)}
 		return nil
 	}
 
-	b.queues[channel] = append(b.queues[channel], payload)
+	b.queues[channel] = append(b.queues[channel], slices.Clone(payload))
 	b.mu.Unlock()
 	return nil
 }

@@ -15,7 +15,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unicode/utf8"
 )
 
 const (
@@ -35,14 +34,14 @@ var channelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 type request struct {
 	Op        string   `json:"op"`
 	Channels  []string `json:"channels,omitempty"`
-	Payload   string   `json:"payload,omitempty"`
+	Payload   []byte   `json:"payload,omitempty"`
 	TimeoutMS int64    `json:"timeout_ms,omitempty"`
 }
 
 type response struct {
 	OK      bool   `json:"ok"`
 	Channel string `json:"channel,omitempty"`
-	Payload string `json:"payload,omitempty"`
+	Payload []byte `json:"payload,omitempty"`
 	Error   string `json:"error,omitempty"`
 }
 
@@ -57,31 +56,17 @@ func run(args []string) int {
 	}
 
 	switch args[0] {
-	case "help", "-h", "--help":
-		printUsage(os.Stdout)
-		return exitOK
-	case "--run":
-		if len(args) == 1 {
-			fmt.Fprintln(os.Stderr, "missing subcommand after --run")
-			printUsage(os.Stderr)
-			return exitUsage
-		}
-		return runCommand(args[1:])
-	default:
-		fmt.Fprintln(os.Stderr, "use --run to execute commands")
-		printUsage(os.Stderr)
-		return exitUsage
-	}
-}
-
-func runCommand(args []string) int {
-	switch args[0] {
 	case "push":
 		return runPush(args[1:])
 	case "pop":
 		return runPop(args[1:])
 	case "serve":
 		return runServe(args[1:])
+	case "stress":
+		return runStress(args[1:])
+	case "help", "-h", "--help":
+		printUsage(os.Stdout)
+		return exitOK
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", args[0])
 		printUsage(os.Stderr)
@@ -90,18 +75,32 @@ func runCommand(args []string) int {
 }
 
 func runPush(args []string) int {
-	socket, positionals, err := parseArgs(args, false)
+	socket, positionals, readStdin, err := parsePushArgs(args)
 	if err != nil {
 		return usageError("push", err)
 	}
-	if len(positionals) != 2 {
-		return usageError("push", errors.New("usage: atomic-queue push [--socket path] channel payload"))
+	if readStdin {
+		if len(positionals) != 1 {
+			return usageError("push", errors.New("usage: atomic-queue push [--socket path] [--stdin] channel [payload]"))
+		}
+	} else if len(positionals) != 2 {
+		return usageError("push", errors.New("usage: atomic-queue push [--socket path] [--stdin] channel [payload]"))
+	}
+
+	var payload []byte
+	if readStdin {
+		payload, err = io.ReadAll(os.Stdin)
+		if err != nil {
+			return runtimeError(fmt.Errorf("read stdin: %w", err))
+		}
+	} else {
+		payload = []byte(positionals[1])
 	}
 
 	req := request{
 		Op:       "push",
 		Channels: []string{positionals[0]},
-		Payload:  positionals[1],
+		Payload:  payload,
 	}
 	if err := validateChannel(req.Channels[0]); err != nil {
 		return runtimeError(err)
@@ -155,7 +154,9 @@ func runPop(args []string) int {
 		return runtimeError(errors.New(resp.Error))
 	}
 
-	fmt.Fprintln(os.Stdout, resp.Payload)
+	if _, err := os.Stdout.Write(resp.Payload); err != nil {
+		return runtimeError(fmt.Errorf("write stdout: %w", err))
+	}
 	return exitOK
 }
 
@@ -292,7 +293,7 @@ func ensureDaemon(socketPath string) error {
 		return fmt.Errorf("resolve executable: %w", err)
 	}
 
-	cmd := exec.Command(self, "--run", "serve", "--socket", socketPath)
+	cmd := exec.Command(self, "serve", "--socket", socketPath)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.Stdin = nil
@@ -355,10 +356,7 @@ func validateChannel(channel string) error {
 	return nil
 }
 
-func validatePayload(payload string, maxBytes int) error {
-	if !utf8.ValidString(payload) {
-		return errors.New("payload must be valid UTF-8")
-	}
+func validatePayload(payload []byte, maxBytes int) error {
 	if len(payload) > maxBytes {
 		return fmt.Errorf("payload exceeds maximum size of %d bytes", maxBytes)
 	}
@@ -413,11 +411,13 @@ func usageError(cmd string, err error) int {
 	fmt.Fprintln(os.Stderr, err)
 	switch cmd {
 	case "push":
-		fmt.Fprintln(os.Stderr, "usage: atomic-queue --run push [--socket path] channel payload")
+		fmt.Fprintln(os.Stderr, "usage: atomic-queue push [--socket path] [--stdin] channel [payload]")
 	case "pop":
-		fmt.Fprintln(os.Stderr, "usage: atomic-queue --run pop [--socket path] [--timeout d] channel...")
+		fmt.Fprintln(os.Stderr, "usage: atomic-queue pop [--socket path] [--timeout d] channel...")
 	case "serve":
-		fmt.Fprintln(os.Stderr, "usage: atomic-queue --run serve [--socket path]")
+		fmt.Fprintln(os.Stderr, "usage: atomic-queue serve [--socket path]")
+	case "stress":
+		fmt.Fprintln(os.Stderr, "usage: atomic-queue stress [--socket path] [--duration 10s] [--threads 1000] [--channels a,b,c] [--pop-timeout 200ms] [--payload-size 128]")
 	}
 	return exitUsage
 }
@@ -442,13 +442,42 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  atomic-queue")
 	fmt.Fprintln(w, "  atomic-queue help")
-	fmt.Fprintln(w, "  atomic-queue --run push channel '{\"foo\":123}'")
-	fmt.Fprintln(w, "  atomic-queue --run pop channel")
-	fmt.Fprintln(w, "  atomic-queue --run pop channel1 channel2 --timeout 1500ms")
-	fmt.Fprintln(w, "  atomic-queue --run serve")
+	fmt.Fprintln(w, "  atomic-queue push channel '{\"foo\":123}'")
+	fmt.Fprintln(w, "  cat file.msgpack | atomic-queue push --stdin channel")
+	fmt.Fprintln(w, "  atomic-queue pop channel")
+	fmt.Fprintln(w, "  atomic-queue pop channel1 channel2 --timeout 1500ms")
+	fmt.Fprintln(w, "  atomic-queue serve")
+	fmt.Fprintln(w, "  atomic-queue stress --duration 10s --threads 1000")
 	fmt.Fprintln(w, "")
 	fmt.Fprintf(w, "Default socket: %s\n", defaultSocketPath())
 	fmt.Fprintln(w, "Override socket: ATOMIC_QUEUE_SOCKET=/path/to.sock or --socket /path/to.sock")
+	fmt.Fprintln(w, "GitHub: https://github.com/parf/atomic-queue")
+}
+
+func parsePushArgs(args []string) (string, []string, bool, error) {
+	socket := defaultSocketPath()
+	positionals := make([]string, 0, len(args))
+	readStdin := false
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--socket":
+			if i+1 >= len(args) {
+				return "", nil, false, errors.New("missing value for --socket")
+			}
+			socket = args[i+1]
+			i++
+		case arg == "--stdin":
+			readStdin = true
+		case hasLongOption(arg, "--socket"):
+			value, _ := trimOption(arg, "--socket")
+			socket = value
+		default:
+			positionals = append(positionals, arg)
+		}
+	}
+	return socket, positionals, readStdin, nil
 }
 
 func parsePopArgs(args []string) (string, []string, time.Duration, error) {

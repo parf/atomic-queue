@@ -12,10 +12,10 @@ import (
 func TestBrokerFIFO(t *testing.T) {
 	b := NewBroker(defaultMaxBytes)
 
-	if err := b.Push("jobs", `{"n":1}`); err != nil {
+	if err := b.Push("jobs", []byte(`{"n":1}`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.Push("jobs", `{"n":2}`); err != nil {
+	if err := b.Push("jobs", []byte(`{"n":2}`)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -31,7 +31,7 @@ func TestBrokerFIFO(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if msg1.Payload != `{"n":1}` || msg2.Payload != `{"n":2}` {
+	if string(msg1.Payload) != `{"n":1}` || string(msg2.Payload) != `{"n":2}` {
 		t.Fatalf("expected FIFO order, got %q then %q", msg1.Payload, msg2.Payload)
 	}
 }
@@ -52,7 +52,7 @@ func TestBrokerMultiChannelWait(t *testing.T) {
 	}()
 
 	time.Sleep(50 * time.Millisecond)
-	if err := b.Push("beta", `{"ok":true}`); err != nil {
+	if err := b.Push("beta", []byte(`{"ok":true}`)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -88,13 +88,13 @@ func TestBrokerConcurrentSingleDelivery(t *testing.T) {
 				results <- result{err: err}
 				return
 			}
-			results <- result{payload: msg.Payload}
+			results <- result{payload: string(msg.Payload)}
 		}()
 	}
 
 	time.Sleep(50 * time.Millisecond)
 	for i := 0; i < count; i++ {
-		if err := b.Push("shared", fmt.Sprintf(`{"id":%d}`, i)); err != nil {
+		if err := b.Push("shared", []byte(fmt.Sprintf(`{"id":%d}`, i))); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -134,7 +134,7 @@ func TestBrokerTimeout(t *testing.T) {
 func TestBrokerAllowsPlainStringPayload(t *testing.T) {
 	b := NewBroker(defaultMaxBytes)
 
-	if err := b.Push("logs", "plain text line"); err != nil {
+	if err := b.Push("logs", []byte("plain text line")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -145,8 +145,28 @@ func TestBrokerAllowsPlainStringPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if msg.Payload != "plain text line" {
+	if string(msg.Payload) != "plain text line" {
 		t.Fatalf("unexpected payload %q", msg.Payload)
+	}
+}
+
+func TestBrokerAllowsBinaryPayload(t *testing.T) {
+	b := NewBroker(defaultMaxBytes)
+	payload := []byte{0x00, 0x01, 0x02, 0xff, 0x10}
+
+	if err := b.Push("bin", payload); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	msg, err := b.Pop(ctx, []string{"bin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(msg.Payload) != string(payload) {
+		t.Fatalf("unexpected binary payload %v", msg.Payload)
 	}
 }
 
@@ -197,7 +217,7 @@ func TestBrokerStressMultiProducerMultiConsumer(t *testing.T) {
 				defer producerWG.Done()
 				for seq := 0; seq < messagesPerProducer; seq++ {
 					payload := fmt.Sprintf("%s:%02d:%03d", channel, producerID, seq)
-					if err := b.Push(channel, payload); err != nil {
+					if err := b.Push(channel, []byte(payload)); err != nil {
 						errs <- err
 						return
 					}
@@ -220,9 +240,9 @@ func TestBrokerStressMultiProducerMultiConsumer(t *testing.T) {
 	seen := make(map[string]int, totalMessages)
 	byChannel := make(map[string][]string, len(channels))
 	for msg := range results {
-		key := msg.Channel + "\x00" + msg.Payload
+		key := msg.Channel + "\x00" + string(msg.Payload)
 		seen[key]++
-		byChannel[msg.Channel] = append(byChannel[msg.Channel], msg.Payload)
+		byChannel[msg.Channel] = append(byChannel[msg.Channel], string(msg.Payload))
 	}
 
 	if len(seen) != totalMessages {
