@@ -22,7 +22,7 @@ const (
 	exitRuntime        = 1
 	exitTimeout        = 2
 	exitUsage          = 64
-	defaultMaxBytes    = 1 << 20
+	defaultMaxBytes    = 256 << 20
 	clientDialTimeout  = 200 * time.Millisecond
 	daemonStartTimeout = 2 * time.Second
 	socketProbeDelay   = 50 * time.Millisecond
@@ -185,7 +185,10 @@ func serve(socketPath string) error {
 		return err
 	}
 
+	// Limit socket permissions at creation time before any local peer can connect.
+	prevUmask := syscall.Umask(0o077)
 	listener, err := net.Listen("unix", socketPath)
+	syscall.Umask(prevUmask)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", socketPath, err)
 	}
@@ -210,10 +213,6 @@ func serve(socketPath string) error {
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return nil
-			}
-			var ne net.Error
-			if errors.As(err, &ne) && ne.Temporary() {
-				continue
 			}
 			return fmt.Errorf("accept: %w", err)
 		}
@@ -243,7 +242,7 @@ func handleConn(conn net.Conn, broker *Broker) {
 				_ = writeResponse(writer, response{Error: "push requires exactly one channel"})
 				return
 			}
-			if err := broker.Push(req.Channels[0], req.Payload); err != nil {
+			if err := broker.PushOwned(req.Channels[0], req.Payload); err != nil {
 				_ = writeResponse(writer, response{Error: err.Error()})
 				return
 			}

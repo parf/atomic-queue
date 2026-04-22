@@ -54,21 +54,13 @@ INSTANCES=100 DURATION=10 PUBLISHERS=5 CONSUMERS=5 PARALLEL_JOBS=100 ./scripts/p
 
 By default it now targets `10s` and `1000` total workers across `100` instances.
 
-## Performance On This Machine
+Python note:
 
-```text
-❯ ATOMIC_QUEUE_SOCKET=/tmp/atomic-queue.sock ATOMIC_QUEUE_BIN=./atomic-queue \
-  python3 ./examples/python/stress_test.py --duration 10 --threads 1000
-stress duration: 10.003s
-threads: 1000 (500 producers, 500 consumers)
-channels: stress-a, stress-b, stress-c, stress-d
-messages pushed: 223324
-messages served: 40256
-pop timeouts: 0
-client failures: 0
-push rate: 22325.77 msg/s
-serve rate: 4024.41 msg/s
-```
+- The GNU `parallel` wrapper is the practical benchmark path for Python in this repo and should be used first when you want serious load.
+- The single-process threaded stress example is GIL-bound and does a lot of small Python-level socket/frame work, so it does not scale like the Go or PHP runners.
+- If you want higher Python-side throughput, run many processes with GNU `parallel` or another process-based launcher instead of piling on more threads in one interpreter.
+
+## Performance On This Machine
 
 GNU `parallel`, `100` instances, `5` producers and `5` consumers per instance:
 
@@ -86,7 +78,18 @@ push rate: 176546.62 msg/s
 serve rate: 176083.38 msg/s
 ```
 
-Python note:
+Single-process threaded stress example:
 
-- The single-process threaded stress example is GIL-bound and does a lot of small Python-level socket/frame work, so it does not scale like the Go or PHP runners.
-- If you want higher Python-side throughput, run many processes with GNU `parallel` or another process-based launcher instead of piling on more threads in one interpreter.
+```text
+❯ ATOMIC_QUEUE_SOCKET=/tmp/atomic-queue.sock ATOMIC_QUEUE_BIN=./atomic-queue \
+  python3 ./examples/python/stress_test.py --duration 10 --threads 1000
+stress duration: 10.003s
+threads: 1000 (500 producers, 500 consumers)
+channels: stress-a, stress-b, stress-c, stress-d
+messages pushed: 223324
+messages served: 40256
+pop timeouts: 0
+client failures: 0
+push rate: 22325.77 msg/s
+serve rate: 4024.41 msg/s
+```

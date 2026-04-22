@@ -36,11 +36,22 @@ func NewBroker(maxBytes int) *Broker {
 }
 
 func (b *Broker) Push(channel string, payload []byte) error {
+	return b.push(channel, payload, true)
+}
+
+func (b *Broker) PushOwned(channel string, payload []byte) error {
+	return b.push(channel, payload, false)
+}
+
+func (b *Broker) push(channel string, payload []byte, clonePayload bool) error {
 	if err := validateChannel(channel); err != nil {
 		return err
 	}
 	if err := validatePayload(payload, b.maxBytes); err != nil {
 		return err
+	}
+	if clonePayload {
+		payload = slices.Clone(payload)
 	}
 
 	b.mu.Lock()
@@ -49,13 +60,13 @@ func (b *Broker) Push(channel string, payload []byte) error {
 			continue
 		}
 
-		b.waiters = append(b.waiters[:i], b.waiters[i+1:]...)
+		b.removeWaiterAtLocked(i)
 		b.mu.Unlock()
-		w.reply <- delivery{Channel: channel, Payload: slices.Clone(payload)}
+		w.reply <- delivery{Channel: channel, Payload: payload}
 		return nil
 	}
 
-	b.queues[channel] = append(b.queues[channel], slices.Clone(payload))
+	b.queues[channel] = append(b.queues[channel], payload)
 	b.mu.Unlock()
 	return nil
 }
@@ -132,10 +143,17 @@ func (b *Broker) removeWaiterLocked(target *waiter) bool {
 			continue
 		}
 
-		b.waiters = append(b.waiters[:i], b.waiters[i+1:]...)
+		b.removeWaiterAtLocked(i)
 		return true
 	}
 	return false
+}
+
+func (b *Broker) removeWaiterAtLocked(i int) {
+	last := len(b.waiters) - 1
+	copy(b.waiters[i:], b.waiters[i+1:])
+	b.waiters[last] = nil
+	b.waiters = b.waiters[:last]
 }
 
 func waiterMatches(w *waiter, channel string) bool {

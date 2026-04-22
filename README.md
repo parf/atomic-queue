@@ -8,8 +8,9 @@ Fast enough for aggressive local IPC workloads: on this machine the built-in str
 - Multiple consumers can pop from one or more channels.
 - `pop` can block with a timeout.
 - Each message goes to exactly one consumer.
-- Any payload is supported: plain text, JSON, msgpack, binary blobs, anything up to `1 MiB`.
+- Any payload is supported: plain text, JSON, msgpack, binary blobs, anything up to `256 MiB`.
 - `pop` writes raw message bytes to stdout.
+- The wire protocol has room well beyond that, but the daemon stays bounded instead of unbounded.
 
 Internally it uses one small Unix socket daemon with in-memory per-channel FIFO queues. If no daemon is running, `push` and `pop` auto-start one on first use.
 
@@ -161,7 +162,8 @@ $XDG_RUNTIME_DIR/atomic-queue/atomic-queue.sock
 - Linux only.
 - Local machine only.
 - In-memory only; messages are lost if the daemon exits or the machine reboots.
-- Maximum payload size is `1 MiB`.
+- Maximum payload size is `256 MiB`.
+- The wire protocol length field allows much larger frames, but `atomic-queue` intentionally keeps the daemon bounded with a `256 MiB` payload limit.
 - Channel names are limited to `[A-Za-z0-9._-]` and max length `128`.
 - If several requested channels already have queued data, `pop` checks them in the order you passed.
 
