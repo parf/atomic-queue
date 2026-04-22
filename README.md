@@ -74,6 +74,8 @@ Run the built-in stress test for 10 seconds with 1000 threads:
 ./atomic-queue stress --duration 10s --threads 1000
 ```
 
+Fast enough for aggressive local IPC workloads: on this machine it sustains roughly `400k+` messages per second in the built-in stress test.
+
 Use custom channels and timeouts:
 
 ```bash
@@ -84,15 +86,15 @@ Observed on this machine:
 
 ```text
 ❯ ./atomic-queue stress --duration 10s --threads 1000
-stress duration: 10.007s
+stress duration: 10.004s
 threads: 1000 (500 producers, 500 consumers)
 channels: stress-a, stress-b, stress-c, stress-d
-messages pushed: 629678
-messages served: 627577
+messages pushed: 4278367
+messages served: 4269714
 pop timeouts: 0
 client failures: 0
-push rate: 62922.32 msg/s
-serve rate: 62712.37 msg/s
+push rate: 427670.05 msg/s
+serve rate: 426805.09 msg/s
 ```
 
 Start the daemon explicitly instead of relying on auto-start:

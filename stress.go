@@ -70,22 +70,26 @@ func runStress(args []string) int {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
+			client, err := newRPCClient(cfg.socket, false)
+			if err != nil {
+				failures.Add(1)
+				return
+			}
+			defer client.Close()
+
 			rng := rand.New(rand.NewSource(time.Now().UnixNano() + int64(workerID+1)))
 			seq := 0
 			for ctx.Err() == nil {
 				channel := cfg.channels[rng.Intn(len(cfg.channels))]
-				resp, err := roundTrip(cfg.socket, request{
+				resp, err := client.Do(request{
 					Op:       "push",
 					Channels: []string{channel},
 					Payload:  makeStressPayload(workerID, seq, cfg.payloadLen, rng),
-				}, true)
+				})
 				seq++
 				if err != nil {
 					failures.Add(1)
-					if ctx.Err() != nil {
-						return
-					}
-					continue
+					return
 				}
 				if !resp.OK {
 					failures.Add(1)
@@ -100,18 +104,22 @@ func runStress(args []string) int {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			client, err := newRPCClient(cfg.socket, false)
+			if err != nil {
+				failures.Add(1)
+				return
+			}
+			defer client.Close()
+
 			for ctx.Err() == nil {
-				resp, err := roundTrip(cfg.socket, request{
+				resp, err := client.Do(request{
 					Op:        "pop",
 					Channels:  cfg.channels,
 					TimeoutMS: cfg.popTimeout.Milliseconds(),
-				}, true)
+				})
 				if err != nil {
 					failures.Add(1)
-					if ctx.Err() != nil {
-						return
-					}
-					continue
+					return
 				}
 				if !resp.OK {
 					if resp.Error == ErrTimeout.Error() {

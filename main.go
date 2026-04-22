@@ -1,8 +1,8 @@
 package main
 
 import (
+	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -224,69 +224,102 @@ func serve(socketPath string) error {
 func handleConn(conn net.Conn, broker *Broker) {
 	defer conn.Close()
 
-	var req request
-	if err := json.NewDecoder(conn).Decode(&req); err != nil {
-		writeResponse(conn, response{Error: fmt.Sprintf("decode request: %v", err)})
-		return
-	}
+	reader := bufio.NewReader(conn)
+	writer := bufio.NewWriter(conn)
 
-	switch req.Op {
-	case "push":
-		if len(req.Channels) != 1 {
-			writeResponse(conn, response{Error: "push requires exactly one channel"})
-			return
-		}
-		if err := broker.Push(req.Channels[0], req.Payload); err != nil {
-			writeResponse(conn, response{Error: err.Error()})
-			return
-		}
-		writeResponse(conn, response{OK: true})
-	case "pop":
-		timeout := time.Duration(req.TimeoutMS) * time.Millisecond
-		ctx, cancel := timeoutContext(timeout)
-		defer cancel()
-
-		msg, err := broker.Pop(ctx, req.Channels)
+	for {
+		req, err := readRequest(reader)
 		if err != nil {
-			writeResponse(conn, response{Error: err.Error()})
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			_ = writeResponse(writer, response{Error: fmt.Sprintf("decode request: %v", err)})
 			return
 		}
-		writeResponse(conn, response{
-			OK:      true,
-			Channel: msg.Channel,
-			Payload: msg.Payload,
-		})
-	default:
-		writeResponse(conn, response{Error: fmt.Sprintf("unknown op %q", req.Op)})
-	}
-}
 
-func writeResponse(w io.Writer, resp response) {
-	_ = json.NewEncoder(w).Encode(resp)
+		switch req.Op {
+		case "push":
+			if len(req.Channels) != 1 {
+				_ = writeResponse(writer, response{Error: "push requires exactly one channel"})
+				return
+			}
+			if err := broker.Push(req.Channels[0], req.Payload); err != nil {
+				_ = writeResponse(writer, response{Error: err.Error()})
+				return
+			}
+			if err := writeResponse(writer, response{OK: true}); err != nil {
+				return
+			}
+		case "pop":
+			timeout := time.Duration(req.TimeoutMS) * time.Millisecond
+			ctx, cancel := timeoutContext(timeout)
+			msg, err := broker.Pop(ctx, req.Channels)
+			cancel()
+			if err != nil {
+				_ = writeResponse(writer, response{Error: err.Error()})
+				return
+			}
+			if err := writeResponse(writer, response{
+				OK:      true,
+				Channel: msg.Channel,
+				Payload: msg.Payload,
+			}); err != nil {
+				return
+			}
+		default:
+			_ = writeResponse(writer, response{Error: fmt.Sprintf("unknown op %q", req.Op)})
+			return
+		}
+	}
 }
 
 func roundTrip(socketPath string, req request, autoStart bool) (response, error) {
+	client, err := newRPCClient(socketPath, autoStart)
+	if err != nil {
+		return response{}, err
+	}
+	defer client.Close()
+
+	return client.Do(req)
+}
+
+type rpcClient struct {
+	conn net.Conn
+	r    *bufio.Reader
+	w    *bufio.Writer
+}
+
+func newRPCClient(socketPath string, autoStart bool) (*rpcClient, error) {
 	conn, err := net.DialTimeout("unix", socketPath, clientDialTimeout)
 	if err != nil && autoStart && shouldStartDaemon(err) {
 		if startErr := ensureDaemon(socketPath); startErr != nil {
-			return response{}, startErr
+			return nil, startErr
 		}
 		conn, err = net.DialTimeout("unix", socketPath, clientDialTimeout)
 	}
 	if err != nil {
-		return response{}, fmt.Errorf("connect to daemon: %w", err)
+		return nil, fmt.Errorf("connect to daemon: %w", err)
 	}
-	defer conn.Close()
+	return &rpcClient{
+		conn: conn,
+		r:    bufio.NewReader(conn),
+		w:    bufio.NewWriter(conn),
+	}, nil
+}
 
-	if err := json.NewEncoder(conn).Encode(req); err != nil {
+func (c *rpcClient) Do(req request) (response, error) {
+	if err := writeRequest(c.w, req); err != nil {
 		return response{}, fmt.Errorf("send request: %w", err)
 	}
-
-	var resp response
-	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+	resp, err := readResponse(c.r)
+	if err != nil {
 		return response{}, fmt.Errorf("read response: %w", err)
 	}
 	return resp, nil
+}
+
+func (c *rpcClient) Close() error {
+	return c.conn.Close()
 }
 
 func ensureDaemon(socketPath string) error {
