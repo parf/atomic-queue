@@ -67,15 +67,15 @@ GNU `parallel`, `100` instances, `5` producers and `5` consumers per instance:
 ```text
 ❯ ATOMIC_QUEUE_SOCKET=/tmp/atomic-queue.sock ATOMIC_QUEUE_BIN=./atomic-queue \
   INSTANCES=100 DURATION=10 PUBLISHERS=5 CONSUMERS=5 PARALLEL_JOBS=100 ./scripts/python-parallel-stress.sh
-stress duration: 12.760s
+stress duration: 12.318s
 workers: 1000 (500 producers, 500 consumers) across 100 instances
 channels: stress-a, stress-b, stress-c, stress-d
-messages pushed: 2492436
-messages served: 2448212
+messages pushed: 2977283
+messages served: 3100775
 pop timeouts: 0
 client failures: 0
-push rate: 195331.97 msg/s
-serve rate: 191866.14 msg/s
+push rate: 241701.82 msg/s
+serve rate: 251727.15 msg/s
 ```
 
 Single-process threaded stress example:
@@ -83,13 +83,13 @@ Single-process threaded stress example:
 ```text
 ❯ ATOMIC_QUEUE_SOCKET=/tmp/atomic-queue.sock ATOMIC_QUEUE_BIN=./atomic-queue \
   python3 ./examples/python/stress_runner.py --duration 10 --threads 1000
-stress duration: 10.004s
+stress duration: 10.068s
 threads: 1000 (500 producers, 500 consumers)
 channels: stress-a, stress-b, stress-c, stress-d
-messages pushed: 233151
-messages served: 45928
+messages pushed: 447156
+messages served: 45429
 pop timeouts: 0
 client failures: 0
-push rate: 23305.82 msg/s
-serve rate: 4590.97 msg/s
+push rate: 44412.50 msg/s
+serve rate: 4512.11 msg/s
 ```

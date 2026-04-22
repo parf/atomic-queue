@@ -16,6 +16,8 @@ PACK_UINT16 = struct.Struct(">H")
 PACK_UINT32 = struct.Struct(">I")
 CLIENT_DIAL_TIMEOUT = 0.2
 CHANNEL_CACHE_LIMIT = 256
+READ_BUFFER_SIZE = 65536
+_TIMEOUT_ERROR = b"timeout"
 
 
 class AtomicQueueError(RuntimeError):
@@ -54,8 +56,9 @@ class AtomicQueueClient:
     def __init__(self, socket_path: str | None = None) -> None:
         self.socket_path = socket_path or default_socket_path()
         self.sock = self._connect(allow_autostart=True)
-        self._channel_cache: OrderedDict[tuple[str, ...], bytes] = OrderedDict()
+        self.rbuf = self.sock.makefile("rb", buffering=READ_BUFFER_SIZE)
         self._push_channel_cache: OrderedDict[str, bytes] = OrderedDict()
+        self._pop_frame_cache: OrderedDict[tuple, bytes] = OrderedDict()
 
     def __enter__(self) -> "AtomicQueueClient":
         return self
@@ -64,27 +67,35 @@ class AtomicQueueClient:
         self.close()
 
     def close(self) -> None:
-        self.sock.close()
+        try:
+            self.rbuf.close()
+        finally:
+            self.sock.close()
 
     def push(self, channel: str, payload: bytes) -> None:
-        self._write_request(self.OP_PUSH, [channel], payload, 0)
-        ok, _channel, _payload, error = self._read_response()
+        self._send_push(channel, payload)
+        ok, _channel_bytes, _payload, error_bytes = self._read_response()
         if not ok:
-            raise AtomicQueueError(error)
+            raise AtomicQueueError(error_bytes.decode("utf-8") if error_bytes else "")
 
     def pop(self, channels: Iterable[str], timeout_ms: int = 0) -> bytes:
-        _channel, payload = self.pop_message(channels, timeout_ms)
-        return payload
+        self._send_pop(channels, timeout_ms)
+        ok, _channel_bytes, payload, error_bytes = self._read_response()
+        if ok:
+            return payload
+        if error_bytes == _TIMEOUT_ERROR:
+            raise AtomicQueueTimeout("timeout")
+        raise AtomicQueueError(error_bytes.decode("utf-8") if error_bytes else "")
 
     def pop_message(self, channels: Iterable[str], timeout_ms: int = 0) -> tuple[str, bytes]:
-        channel_list = list(channels)
-        self._write_request(self.OP_POP, channel_list, b"", timeout_ms)
-        ok, channel, payload, error = self._read_response()
+        self._send_pop(channels, timeout_ms)
+        ok, channel_bytes, payload, error_bytes = self._read_response()
         if ok:
+            channel = channel_bytes.decode("utf-8") if channel_bytes else ""
             return channel, payload
-        if error == "timeout":
-            raise AtomicQueueTimeout(error)
-        raise AtomicQueueError(error)
+        if error_bytes == _TIMEOUT_ERROR:
+            raise AtomicQueueTimeout("timeout")
+        raise AtomicQueueError(error_bytes.decode("utf-8") if error_bytes else "")
 
     def _connect(self, allow_autostart: bool) -> socket.socket:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -109,66 +120,60 @@ class AtomicQueueClient:
             sock.close()
             raise AtomicQueueError(f"connect to daemon timed out at {self.socket_path}")
 
-    def _write_request(self, op: int, channels: list[str], payload: bytes, timeout_ms: int) -> None:
-        frame = bytearray()
-        frame.append(op)
-        frame.extend(PACK_INT64.pack(timeout_ms))
-        if op == self.OP_PUSH and len(channels) == 1:
-            encoded_channels = self._push_channel_cache.get(channels[0])
-            if encoded_channels is None:
-                encoded = channels[0].encode("utf-8")
-                encoded_channels = PACK_UINT16.pack(1) + PACK_UINT16.pack(len(encoded)) + encoded
-                self._cache_put(self._push_channel_cache, channels[0], encoded_channels)
-            else:
-                self._push_channel_cache.move_to_end(channels[0])
-            frame.extend(encoded_channels)
+    def _send_push(self, channel: str, payload: bytes) -> None:
+        encoded_channels = self._push_channel_cache.get(channel)
+        if encoded_channels is None:
+            encoded = channel.encode("utf-8")
+            encoded_channels = PACK_UINT16.pack(1) + PACK_UINT16.pack(len(encoded)) + encoded
+            self._cache_put(self._push_channel_cache, channel, encoded_channels)
         else:
-            key = tuple(channels)
-            encoded_channels = self._channel_cache.get(key)
-            if encoded_channels is None:
-                encoded_parts = [PACK_UINT16.pack(len(channels))]
-                for channel in channels:
-                    encoded = channel.encode("utf-8")
-                    encoded_parts.append(PACK_UINT16.pack(len(encoded)))
-                    encoded_parts.append(encoded)
-                encoded_channels = b"".join(encoded_parts)
-                self._cache_put(self._channel_cache, key, encoded_channels)
-            else:
-                self._channel_cache.move_to_end(key)
-            frame.extend(encoded_channels)
+            self._push_channel_cache.move_to_end(channel)
+        frame = bytearray()
+        frame.append(self.OP_PUSH)
+        frame.extend(PACK_INT64.pack(0))
+        frame.extend(encoded_channels)
         frame.extend(PACK_UINT32.pack(len(payload)))
         frame.extend(payload)
         self.sock.sendall(frame)
 
-    def _read_response(self) -> tuple[bool, str, bytes, str]:
-        status = self._read_exact(1)[0]
-        channel_bytes = self._read_string16_bytes()
-        payload = self._read_bytes32()
-        error_bytes = self._read_bytes32()
-        channel = channel_bytes.decode("utf-8") if channel_bytes else ""
-        error = error_bytes.decode("utf-8") if error_bytes else ""
-        return status == self.STATUS_OK, channel, payload, error
+    def _send_pop(self, channels: Iterable[str], timeout_ms: int) -> None:
+        channel_tuple = tuple(channels)
+        cache_key = (channel_tuple, timeout_ms)
+        frame = self._pop_frame_cache.get(cache_key)
+        if frame is None:
+            parts = [bytes((self.OP_POP,)), PACK_INT64.pack(timeout_ms), PACK_UINT16.pack(len(channel_tuple))]
+            for channel in channel_tuple:
+                encoded = channel.encode("utf-8")
+                parts.append(PACK_UINT16.pack(len(encoded)))
+                parts.append(encoded)
+            parts.append(PACK_UINT32.pack(0))
+            frame = b"".join(parts)
+            self._cache_put(self._pop_frame_cache, cache_key, frame)
+        else:
+            self._pop_frame_cache.move_to_end(cache_key)
+        self.sock.sendall(frame)
 
-    def _read_string16_bytes(self) -> bytes:
-        length = PACK_UINT16.unpack(self._read_exact(2))[0]
-        return self._read_exact(length)
-
-    def _read_bytes32(self) -> bytes:
-        length = PACK_UINT32.unpack(self._read_exact(4))[0]
-        return self._read_exact(length)
-
-    def _read_exact(self, length: int) -> bytes:
-        if length == 0:
-            return b""
-        buf = bytearray(length)
-        view = memoryview(buf)
-        received = 0
-        while received < length:
-            chunk = self.sock.recv_into(view[received:], length - received)
-            if chunk == 0:
+    def _read_response(self) -> tuple[bool, bytes, bytes, bytes]:
+        read = self.rbuf.read
+        try:
+            status_byte = read(1)
+            if len(status_byte) < 1:
                 raise AtomicQueueError("unexpected EOF from daemon")
-            received += chunk
-        return bytes(buf)
+            channel_len = PACK_UINT16.unpack(read(2))[0]
+            channel_bytes = read(channel_len) if channel_len else b""
+            payload_len = PACK_UINT32.unpack(read(4))[0]
+            payload = read(payload_len) if payload_len else b""
+            error_len = PACK_UINT32.unpack(read(4))[0]
+            error_bytes = read(error_len) if error_len else b""
+        except struct.error as exc:
+            raise AtomicQueueError("unexpected EOF from daemon") from exc
+        if (
+            len(channel_bytes) != channel_len
+            or len(payload) != payload_len
+            or len(error_bytes) != error_len
+        ):
+            raise AtomicQueueError("unexpected EOF from daemon")
+        return status_byte[0] == self.STATUS_OK, channel_bytes, payload, error_bytes
 
     @staticmethod
     def _cache_put(cache: OrderedDict, key, value: bytes) -> None:
