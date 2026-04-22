@@ -54,13 +54,13 @@ INSTANCES=100 DURATION=10 PUBLISHERS=5 CONSUMERS=5 PARALLEL_JOBS=100 ./scripts/p
 
 By default it now targets `10s` and `1000` total workers across `100` instances.
 
+## Performance On This Machine
+
 Python note:
 
 - The GNU `parallel` wrapper is the practical benchmark path for Python in this repo and should be used first when you want serious load.
 - The single-process threaded stress example is GIL-bound and does a lot of small Python-level socket/frame work, so it does not scale like the Go or PHP runners.
 - If you want higher Python-side throughput, run many processes with GNU `parallel` or another process-based launcher instead of piling on more threads in one interpreter.
-
-## Performance On This Machine
 
 GNU `parallel`, `100` instances, `5` producers and `5` consumers per instance:
 
