@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,17 +12,22 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 	"unicode/utf8"
 )
 
 const (
-	exitOK          = 0
-	exitRuntime     = 1
-	exitTimeout     = 2
-	exitUsage       = 64
-	defaultMaxBytes = 1 << 20
+	exitOK             = 0
+	exitRuntime        = 1
+	exitTimeout        = 2
+	exitUsage          = 64
+	defaultMaxBytes    = 1 << 20
+	clientDialTimeout  = 200 * time.Millisecond
+	daemonStartTimeout = 2 * time.Second
+	socketProbeDelay   = 50 * time.Millisecond
+	accessWrite        = 2
 )
 
 var channelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
@@ -46,10 +52,29 @@ func main() {
 
 func run(args []string) int {
 	if len(args) == 0 {
+		printUsage(os.Stdout)
+		return exitOK
+	}
+
+	switch args[0] {
+	case "help", "-h", "--help":
+		printUsage(os.Stdout)
+		return exitOK
+	case "--run":
+		if len(args) == 1 {
+			fmt.Fprintln(os.Stderr, "missing subcommand after --run")
+			printUsage(os.Stderr)
+			return exitUsage
+		}
+		return runCommand(args[1:])
+	default:
+		fmt.Fprintln(os.Stderr, "use --run to execute commands")
 		printUsage(os.Stderr)
 		return exitUsage
 	}
+}
 
+func runCommand(args []string) int {
 	switch args[0] {
 	case "push":
 		return runPush(args[1:])
@@ -57,9 +82,6 @@ func run(args []string) int {
 		return runPop(args[1:])
 	case "serve":
 		return runServe(args[1:])
-	case "help", "-h", "--help":
-		printUsage(os.Stdout)
-		return exitOK
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", args[0])
 		printUsage(os.Stderr)
@@ -172,12 +194,11 @@ func serve(socketPath string) error {
 
 	broker := NewBroker(defaultMaxBytes)
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	go func() {
-		<-sigCh
+		<-ctx.Done()
 		_ = listener.Close()
 	}()
 
@@ -242,12 +263,12 @@ func writeResponse(w io.Writer, resp response) {
 }
 
 func roundTrip(socketPath string, req request, autoStart bool) (response, error) {
-	conn, err := net.Dial("unix", socketPath)
+	conn, err := net.DialTimeout("unix", socketPath, clientDialTimeout)
 	if err != nil && autoStart && shouldStartDaemon(err) {
 		if startErr := ensureDaemon(socketPath); startErr != nil {
 			return response{}, startErr
 		}
-		conn, err = net.Dial("unix", socketPath)
+		conn, err = net.DialTimeout("unix", socketPath, clientDialTimeout)
 	}
 	if err != nil {
 		return response{}, fmt.Errorf("connect to daemon: %w", err)
@@ -271,7 +292,7 @@ func ensureDaemon(socketPath string) error {
 		return fmt.Errorf("resolve executable: %w", err)
 	}
 
-	cmd := exec.Command(self, "serve", "--socket", socketPath)
+	cmd := exec.Command(self, "--run", "serve", "--socket", socketPath)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.Stdin = nil
@@ -281,14 +302,14 @@ func ensureDaemon(socketPath string) error {
 	}
 	_ = cmd.Process.Release()
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(daemonStartTimeout)
 	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("unix", socketPath, 100*time.Millisecond)
+		conn, err := net.DialTimeout("unix", socketPath, clientDialTimeout)
 		if err == nil {
 			conn.Close()
 			return nil
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(socketProbeDelay)
 	}
 
 	return fmt.Errorf("daemon did not start at %s", socketPath)
@@ -338,9 +359,6 @@ func validatePayload(payload string, maxBytes int) error {
 	if !utf8.ValidString(payload) {
 		return errors.New("payload must be valid UTF-8")
 	}
-	if !json.Valid([]byte(payload)) {
-		return errors.New("payload must be valid JSON")
-	}
 	if len(payload) > maxBytes {
 		return fmt.Errorf("payload exceeds maximum size of %d bytes", maxBytes)
 	}
@@ -348,24 +366,58 @@ func validatePayload(payload string, maxBytes int) error {
 }
 
 func defaultSocketPath() string {
-	if socket := os.Getenv("Q_SOCKET"); socket != "" {
+	if socket := os.Getenv("ATOMIC_QUEUE_SOCKET"); socket != "" {
 		return socket
 	}
-	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
-		return filepath.Join(runtimeDir, "atomic-queue", "atomic-queue.sock")
+	return resolveSocketPath(candidateSocketPaths())
+}
+
+func candidateSocketPaths() []string {
+	userName := os.Getenv("USER")
+	if userName == "" {
+		userName = fmt.Sprintf("uid-%d", os.Getuid())
 	}
-	return filepath.Join(os.TempDir(), fmt.Sprintf("atomic-queue-%d", os.Getuid()), "atomic-queue.sock")
+
+	paths := []string{
+		filepath.Join("/run", userName+"-atomic-queue.sock"),
+	}
+	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
+		paths = append(paths, filepath.Join(runtimeDir, "atomic-queue", "atomic-queue.sock"))
+	}
+	paths = append(paths, filepath.Join(os.TempDir(), fmt.Sprintf("atomic-queue-%d", os.Getuid()), "atomic-queue.sock"))
+	return paths
+}
+
+func resolveSocketPath(candidates []string) string {
+	for _, candidate := range candidates {
+		if socketPathUsable(candidate) {
+			return candidate
+		}
+	}
+	return candidates[0]
+}
+
+func socketPathUsable(path string) bool {
+	info, err := os.Stat(path)
+	switch {
+	case err == nil:
+		return info.Mode()&os.ModeSocket != 0
+	case errors.Is(err, os.ErrNotExist):
+		return syscall.Access(filepath.Dir(path), accessWrite) == nil
+	default:
+		return false
+	}
 }
 
 func usageError(cmd string, err error) int {
 	fmt.Fprintln(os.Stderr, err)
 	switch cmd {
 	case "push":
-		fmt.Fprintln(os.Stderr, "usage: atomic-queue push [--socket path] channel payload")
+		fmt.Fprintln(os.Stderr, "usage: atomic-queue --run push [--socket path] channel payload")
 	case "pop":
-		fmt.Fprintln(os.Stderr, "usage: atomic-queue pop [--socket path] [--timeout d] channel...")
+		fmt.Fprintln(os.Stderr, "usage: atomic-queue --run pop [--socket path] [--timeout d] channel...")
 	case "serve":
-		fmt.Fprintln(os.Stderr, "usage: atomic-queue serve [--socket path]")
+		fmt.Fprintln(os.Stderr, "usage: atomic-queue --run serve [--socket path]")
 	}
 	return exitUsage
 }
@@ -387,13 +439,16 @@ func clientError(err error) int {
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "atomic-queue: small local message queue")
 	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "Commands:")
-	fmt.Fprintln(w, "  atomic-queue push channel '{\"foo\":123}'")
-	fmt.Fprintln(w, "  atomic-queue pop channel")
-	fmt.Fprintln(w, "  atomic-queue pop channel1 channel2 --timeout 1500ms")
-	fmt.Fprintln(w, "  atomic-queue serve")
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  atomic-queue")
+	fmt.Fprintln(w, "  atomic-queue help")
+	fmt.Fprintln(w, "  atomic-queue --run push channel '{\"foo\":123}'")
+	fmt.Fprintln(w, "  atomic-queue --run pop channel")
+	fmt.Fprintln(w, "  atomic-queue --run pop channel1 channel2 --timeout 1500ms")
+	fmt.Fprintln(w, "  atomic-queue --run serve")
 	fmt.Fprintln(w, "")
 	fmt.Fprintf(w, "Default socket: %s\n", defaultSocketPath())
+	fmt.Fprintln(w, "Override socket: ATOMIC_QUEUE_SOCKET=/path/to.sock or --socket /path/to.sock")
 }
 
 func parsePopArgs(args []string) (string, []string, time.Duration, error) {
@@ -459,11 +514,7 @@ func parseArgs(args []string, allowTimeout bool) (string, []string, error) {
 }
 
 func trimOption(arg, name string) (string, bool) {
-	prefix := name + "="
-	if len(arg) <= len(prefix) || arg[:len(prefix)] != prefix {
-		return "", false
-	}
-	return arg[len(prefix):], true
+	return strings.CutPrefix(arg, name+"=")
 }
 
 func hasLongOption(arg, name string) bool {

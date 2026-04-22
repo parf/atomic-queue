@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -127,5 +128,128 @@ func TestBrokerTimeout(t *testing.T) {
 	_, err := b.Pop(ctx, []string{"empty"})
 	if err != ErrTimeout {
 		t.Fatalf("expected ErrTimeout, got %v", err)
+	}
+}
+
+func TestBrokerAllowsPlainStringPayload(t *testing.T) {
+	b := NewBroker(defaultMaxBytes)
+
+	if err := b.Push("logs", "plain text line"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	msg, err := b.Pop(ctx, []string{"logs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.Payload != "plain text line" {
+		t.Fatalf("unexpected payload %q", msg.Payload)
+	}
+}
+
+func TestBrokerStressMultiProducerMultiConsumer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping stress test in short mode")
+	}
+
+	b := NewBroker(defaultMaxBytes)
+
+	channels := []string{"alpha", "beta", "gamma", "delta"}
+	producersPerChannel := 8
+	messagesPerProducer := 125
+	totalMessages := len(channels) * producersPerChannel * messagesPerProducer
+	consumerCount := 24
+
+	results := make(chan delivery, totalMessages)
+	errs := make(chan error, consumerCount)
+
+	var consumerWG sync.WaitGroup
+	for i := 0; i < consumerCount; i++ {
+		consumerWG.Add(1)
+		go func() {
+			defer consumerWG.Done()
+			for {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				msg, err := b.Pop(ctx, channels)
+				cancel()
+				if err == ErrTimeout {
+					return
+				}
+				if err != nil {
+					errs <- err
+					return
+				}
+				results <- msg
+			}
+		}()
+	}
+
+	var producerWG sync.WaitGroup
+	for _, channel := range channels {
+		channel := channel
+		for producerID := 0; producerID < producersPerChannel; producerID++ {
+			producerID := producerID
+			producerWG.Add(1)
+			go func() {
+				defer producerWG.Done()
+				for seq := 0; seq < messagesPerProducer; seq++ {
+					payload := fmt.Sprintf("%s:%02d:%03d", channel, producerID, seq)
+					if err := b.Push(channel, payload); err != nil {
+						errs <- err
+						return
+					}
+				}
+			}()
+		}
+	}
+
+	producerWG.Wait()
+	consumerWG.Wait()
+	close(results)
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("stress test failed: %v", err)
+		}
+	}
+
+	seen := make(map[string]int, totalMessages)
+	byChannel := make(map[string][]string, len(channels))
+	for msg := range results {
+		key := msg.Channel + "\x00" + msg.Payload
+		seen[key]++
+		byChannel[msg.Channel] = append(byChannel[msg.Channel], msg.Payload)
+	}
+
+	if len(seen) != totalMessages {
+		t.Fatalf("expected %d unique deliveries, got %d", totalMessages, len(seen))
+	}
+	for key, count := range seen {
+		if count != 1 {
+			t.Fatalf("message %q delivered %d times", key, count)
+		}
+	}
+
+	for _, channel := range channels {
+		payloads := byChannel[channel]
+		expectedCount := producersPerChannel * messagesPerProducer
+		if len(payloads) != expectedCount {
+			t.Fatalf("channel %s expected %d messages, got %d", channel, expectedCount, len(payloads))
+		}
+
+		sort.Strings(payloads)
+		for producerID := 0; producerID < producersPerChannel; producerID++ {
+			for seq := 0; seq < messagesPerProducer; seq++ {
+				expected := fmt.Sprintf("%s:%02d:%03d", channel, producerID, seq)
+				index := producerID*messagesPerProducer + seq
+				if payloads[index] != expected {
+					t.Fatalf("channel %s missing or out of place message %q at sorted index %d; got %q", channel, expected, index, payloads[index])
+				}
+			}
+		}
 	}
 }

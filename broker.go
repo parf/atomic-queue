@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 )
@@ -80,7 +81,7 @@ func (b *Broker) Pop(ctx context.Context, channels []string) (delivery, error) {
 	}
 
 	w := &waiter{
-		channels: append([]string(nil), channels...),
+		channels: slices.Clone(channels),
 		reply:    make(chan delivery, 1),
 	}
 	b.waiters = append(b.waiters, w)
