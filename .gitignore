@@ -1,1 +1,3 @@
 atomic-queue
+__pycache__/
+*.pyc
