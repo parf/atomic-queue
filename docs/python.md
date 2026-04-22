@@ -58,32 +58,32 @@ By default it now targets `10s` and `1000` total workers across `100` instances.
 
 ```text
 ❯ ATOMIC_QUEUE_SOCKET=/tmp/atomic-queue.sock ATOMIC_QUEUE_BIN=./atomic-queue \
-  python3 ./examples/python/stress_test.py --duration 3 --publishers 20 --consumers 20
-stress duration: 1.951s
-threads: 40 (20 producers, 20 consumers)
+  python3 ./examples/python/stress_test.py --duration 10 --threads 1000
+stress duration: 10.003s
+threads: 1000 (500 producers, 500 consumers)
 channels: stress-a, stress-b, stress-c, stress-d
-messages pushed: 20400
-messages served: 14595
+messages pushed: 223324
+messages served: 40256
 pop timeouts: 0
 client failures: 0
-push rate: 10454.24 msg/s
-serve rate: 7479.40 msg/s
+push rate: 22325.77 msg/s
+serve rate: 4024.41 msg/s
 ```
 
-GNU `parallel`, `100` instances, `1` producer and `1` consumer per instance:
+GNU `parallel`, `100` instances, `5` producers and `5` consumers per instance:
 
 ```text
 ❯ ATOMIC_QUEUE_SOCKET=/tmp/atomic-queue.sock ATOMIC_QUEUE_BIN=./atomic-queue \
-  INSTANCES=100 DURATION=2 PUBLISHERS=1 CONSUMERS=1 PARALLEL_JOBS=100 ./scripts/python-parallel-stress.sh
-stress duration: 3.483s
-workers: 200 (100 producers, 100 consumers) across 100 instances
+  INSTANCES=100 DURATION=10 PUBLISHERS=5 CONSUMERS=5 PARALLEL_JOBS=100 ./scripts/python-parallel-stress.sh
+stress duration: 12.281s
+workers: 1000 (500 producers, 500 consumers) across 100 instances
 channels: stress-a, stress-b, stress-c, stress-d
-messages pushed: 496378
-messages served: 494401
+messages pushed: 2168169
+messages served: 2162480
 pop timeouts: 0
 client failures: 0
-push rate: 142514.50 msg/s
-serve rate: 141946.88 msg/s
+push rate: 176546.62 msg/s
+serve rate: 176083.38 msg/s
 ```
 
 Python note:

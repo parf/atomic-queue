@@ -110,16 +110,21 @@ Run the full benchmark suite with the standard profile:
 Observed on this machine:
 
 ```text
-❯ atomic-queue stress --duration 3s --threads 1000
-stress duration: 3.005s
+❯ ./bench.sh
+benchmark profile:
+  duration: 10s
+  threads: 1000 (500 producers, 500 consumers)
+
+== built-in ==
+stress duration: 10.004s
 threads: 1000 (500 producers, 500 consumers)
 channels: stress-a, stress-b, stress-c, stress-d
-messages pushed: 1204390
-messages served: 1202933
+messages pushed: 4252105
+messages served: 4234231
 pop timeouts: 0
 client failures: 0
-push rate: 400818.12 msg/s
-serve rate: 400333.23 msg/s
+push rate: 425056.05 msg/s
+serve rate: 423269.30 msg/s
 ```
 
 ## ☰ Language Examples
