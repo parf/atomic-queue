@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
+	randv2 "math/rand/v2"
 	"os"
 	"strconv"
 	"strings"
@@ -74,10 +74,10 @@ func runStress(args []string) int {
 			}
 			defer client.Close()
 
-			rng := rand.New(rand.NewSource(time.Now().UnixNano() + int64(workerID+1)))
+			rng := randv2.New(randv2.NewPCG(uint64(time.Now().UnixNano()), uint64(workerID+1)))
 			seq := 0
 			for ctx.Err() == nil {
-				channel := cfg.channels[rng.Intn(len(cfg.channels))]
+				channel := cfg.channels[rng.IntN(len(cfg.channels))]
 				err := client.Push(channel, makeStressPayload(workerID, seq, cfg.payloadLen, rng))
 				seq++
 				if err != nil {
@@ -409,13 +409,22 @@ func splitCSV(value string) []string {
 	return out
 }
 
-func makeStressPayload(workerID, seq, size int, rng *rand.Rand) []byte {
+func makeStressPayload(workerID, seq, size int, rng *randv2.Rand) []byte {
 	prefix := fmt.Sprintf("worker=%d seq=%d ", workerID, seq)
 	if len(prefix) >= size {
 		return []byte(prefix[:size])
 	}
 	raw := make([]byte, (size-len(prefix)+1)/2)
-	_, _ = rng.Read(raw)
+	for i := 0; i < len(raw); i += 8 {
+		u := rng.Uint64()
+		n := len(raw) - i
+		if n > 8 {
+			n = 8
+		}
+		for j := 0; j < n; j++ {
+			raw[i+j] = byte(u >> (8 * j))
+		}
+	}
 	body := hex.EncodeToString(raw)
 	if len(body) > size-len(prefix) {
 		body = body[:size-len(prefix)]

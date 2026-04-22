@@ -85,7 +85,7 @@ run_with_socket "php-parallel" \
   "$repo_dir/scripts/php-parallel-stress.sh"
 
 run_with_socket "python-single" \
-  python3 "$repo_dir/examples/python/stress_test.py" --duration "$duration_seconds" --threads "$threads"
+  python3 "$repo_dir/examples/python/stress_runner.py" --duration "$duration_seconds" --threads "$threads"
 
 python_instances="$(min_int 100 "$(min_int "$publishers" "$consumers")")"
 python_instance_publishers=$((publishers / python_instances))

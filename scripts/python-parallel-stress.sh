@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-python_stress="$repo_dir/examples/python/stress_test.py"
+python_stress="$repo_dir/examples/python/stress_runner.py"
 export ATOMIC_QUEUE_BIN="${ATOMIC_QUEUE_BIN:-$repo_dir/atomic-queue}"
 
 if ! command -v parallel >/dev/null 2>&1; then

@@ -47,15 +47,15 @@ Built-in binary stress command:
 
 ```text
 ❯ ./atomic-queue stress --duration 10s --threads 1000
-stress duration: 10.004s
+stress duration: 10.003s
 threads: 1000 (500 producers, 500 consumers)
 channels: stress-a, stress-b, stress-c, stress-d
-messages pushed: 4252105
-messages served: 4234231
+messages pushed: 4403066
+messages served: 4402178
 pop timeouts: 0
 client failures: 0
-push rate: 425056.05 msg/s
-serve rate: 423269.30 msg/s
+push rate: 440163.52 msg/s
+serve rate: 440074.75 msg/s
 ```
 
 Standalone Go stress example:

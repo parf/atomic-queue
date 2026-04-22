@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import threading
 import time
 from dataclasses import dataclass
@@ -23,12 +24,12 @@ def make_payload(worker_id: int, seq: int, size: int) -> bytes:
     prefix = f"worker={worker_id} seq={seq} ".encode()
     if len(prefix) >= size:
         return prefix[:size]
-    payload = bytearray(size)
-    payload[: len(prefix)] = prefix
     alphabet = b"0123456789abcdef"
-    for i in range(len(prefix), size):
-        payload[i] = alphabet[(worker_id + seq + i) & 0x0F]
-    return bytes(payload)
+    remainder = size - len(prefix)
+    offset = (worker_id + seq + len(prefix)) & 0x0F
+    pattern = alphabet[offset:] + alphabet[:offset]
+    body = (pattern * ((remainder + len(pattern) - 1) // len(pattern)))[:remainder]
+    return prefix + body
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,50 +60,42 @@ def main() -> int:
     publishers, consumers = worker_counts(args)
     end_time = time.monotonic() + args.duration
     results: list[Counters] = []
-    results_lock = threading.Lock()
 
-    warm = AtomicQueueClient(args.socket)
-    try:
+    with AtomicQueueClient(args.socket) as warm:
         try:
             warm.pop(channels, 1)
         except AtomicQueueTimeout:
             pass
-    finally:
-        warm.close()
 
     def producer(worker_id: int) -> None:
-        client = AtomicQueueClient(args.socket)
-        local = Counters()
-        seq = 0
-        next_channel = worker_id % len(channels)
-        try:
-            while time.monotonic() < end_time:
-                client.push(channels[next_channel], make_payload(worker_id, seq, args.payload_size))
-                next_channel = (next_channel + 1) % len(channels)
-                seq += 1
-                local.pushed += 1
-        except AtomicQueueError:
-            local.failures += 1
-        finally:
-            client.close()
-            with results_lock:
+        with AtomicQueueClient(args.socket) as client:
+            local = Counters()
+            seq = 0
+            rng = random.Random(worker_id + 1)
+            try:
+                while time.monotonic() < end_time:
+                    channel = channels[rng.randrange(len(channels))]
+                    client.push(channel, make_payload(worker_id, seq, args.payload_size))
+                    seq += 1
+                    local.pushed += 1
+            except AtomicQueueError:
+                local.failures += 1
+            finally:
                 results.append(local)
 
     def consumer() -> None:
-        client = AtomicQueueClient(args.socket)
-        local = Counters()
-        try:
-            while time.monotonic() < end_time:
-                try:
-                    client.pop(channels, args.pop_timeout_ms)
-                    local.served += 1
-                except AtomicQueueTimeout:
-                    local.timeouts += 1
-        except AtomicQueueError:
-            local.failures += 1
-        finally:
-            client.close()
-            with results_lock:
+        with AtomicQueueClient(args.socket) as client:
+            local = Counters()
+            try:
+                while time.monotonic() < end_time:
+                    try:
+                        client.pop(channels, args.pop_timeout_ms)
+                        local.served += 1
+                    except AtomicQueueTimeout:
+                        local.timeouts += 1
+            except AtomicQueueError:
+                local.failures += 1
+            finally:
                 results.append(local)
 
     started = time.monotonic()
