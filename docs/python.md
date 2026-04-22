@@ -31,13 +31,13 @@ client.close()
 Run the standalone Python stress example:
 
 ```bash
-python3 ./examples/python/stress_test.py --duration 10 --threads 100
+python3 ./examples/python/stress_test.py --duration 10 --threads 1000
 ```
 
 JSON output mode:
 
 ```bash
-python3 ./examples/python/stress_test.py --duration 10 --publishers 50 --consumers 50 --format json
+python3 ./examples/python/stress_test.py --duration 10 --publishers 500 --consumers 500 --format json
 ```
 
 Run `100` Python stress instances with GNU `parallel`:
@@ -49,8 +49,10 @@ Run `100` Python stress instances with GNU `parallel`:
 Override with env vars:
 
 ```bash
-INSTANCES=100 DURATION=5 PUBLISHERS=1 CONSUMERS=1 PARALLEL_JOBS=100 ./scripts/python-parallel-stress.sh
+INSTANCES=100 DURATION=10 PUBLISHERS=5 CONSUMERS=5 PARALLEL_JOBS=100 ./scripts/python-parallel-stress.sh
 ```
+
+By default it now targets `10s` and `1000` total workers across `100` instances.
 
 ## Performance On This Machine
 

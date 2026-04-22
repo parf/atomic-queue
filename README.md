@@ -101,6 +101,12 @@ Machine-readable output:
 atomic-queue stress --duration 10s --publishers 500 --consumers 500 --format json
 ```
 
+Run the full benchmark suite with the standard profile:
+
+```bash
+./bench.sh
+```
+
 Observed on this machine:
 
 ```text

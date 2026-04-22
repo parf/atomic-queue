@@ -20,19 +20,19 @@ It keeps a persistent Unix socket connection open, pushes one payload, then pops
 Run it directly:
 
 ```bash
-go run ./examples/go/stress --duration 10s --threads 100
+go run ./examples/go/stress --duration 10s --threads 1000
 ```
 
 Explicit publishers and consumers:
 
 ```bash
-go run ./examples/go/stress --duration 10s --publishers 50 --consumers 50
+go run ./examples/go/stress --duration 10s --publishers 500 --consumers 500
 ```
 
 JSON output:
 
 ```bash
-go run ./examples/go/stress --duration 10s --publishers 50 --consumers 50 --format json
+go run ./examples/go/stress --duration 10s --publishers 500 --consumers 500 --format json
 ```
 
 If you already depend on Go, the built-in binary stress runner is still the fastest path:

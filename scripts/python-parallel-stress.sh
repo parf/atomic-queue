@@ -20,9 +20,9 @@ trap 'rm -rf "$tmpdir"' EXIT
 
 export ATOMIC_QUEUE_SOCKET="${ATOMIC_QUEUE_SOCKET:-$tmpdir/atomic-queue.sock}"
 export instances="${INSTANCES:-100}"
-export duration="${DURATION:-5}"
-export publishers="${PUBLISHERS:-1}"
-export consumers="${CONSUMERS:-1}"
+export duration="${DURATION:-10}"
+export publishers="${PUBLISHERS:-5}"
+export consumers="${CONSUMERS:-5}"
 export channels="${CHANNELS:-stress-a,stress-b,stress-c,stress-d}"
 export pop_timeout_ms="${POP_TIMEOUT_MS:-200}"
 export payload_size="${PAYLOAD_SIZE:-128}"
