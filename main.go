@@ -26,7 +26,6 @@ const (
 	clientDialTimeout  = 200 * time.Millisecond
 	daemonStartTimeout = 2 * time.Second
 	socketProbeDelay   = 50 * time.Millisecond
-	accessWrite        = 2
 )
 
 var channelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
@@ -170,6 +169,9 @@ func runServe(args []string) int {
 	}
 
 	if err := serve(socket); err != nil {
+		if hint := socketSuggestion(socket); hint != "" {
+			return runtimeError(fmt.Errorf("%w\ntry:\n  atomic-queue serve --socket %q\nor:\n  ATOMIC_QUEUE_SOCKET=%q atomic-queue serve", err, hint, hint))
+		}
 		return runtimeError(err)
 	}
 	return exitOK
@@ -313,7 +315,14 @@ func ensureDaemon(socketPath string) error {
 		time.Sleep(socketProbeDelay)
 	}
 
-	return fmt.Errorf("daemon did not start at %s", socketPath)
+	return fmt.Errorf(
+		"daemon did not start at %s\ntry:\n  %s serve --socket %q\nor:\n  ATOMIC_QUEUE_SOCKET=%q %s serve",
+		socketPath,
+		filepath.Base(self),
+		suggestedSocketPath(socketPath),
+		suggestedSocketPath(socketPath),
+		filepath.Base(self),
+	)
 }
 
 func shouldStartDaemon(err error) bool {
@@ -367,68 +376,26 @@ func defaultSocketPath() string {
 	if socket := os.Getenv("ATOMIC_QUEUE_SOCKET"); socket != "" {
 		return socket
 	}
-	return resolveSocketPath(candidateSocketPaths())
+	return filepath.Join("/run/user", fmt.Sprintf("%d", os.Getuid()), "atomic-queue", "atomic-queue.sock")
 }
 
-func candidateSocketPaths() []string {
-	userName := os.Getenv("USER")
-	if userName == "" {
-		userName = fmt.Sprintf("uid-%d", os.Getuid())
+func suggestedSocketPath(current string) string {
+	if hint := socketSuggestion(current); hint != "" {
+		return hint
 	}
-
-	paths := []string{
-		filepath.Join("/run", userName+"-atomic-queue.sock"),
-	}
-	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
-		paths = append(paths, filepath.Join(runtimeDir, "atomic-queue", "atomic-queue.sock"))
-	}
-	paths = append(paths, filepath.Join(os.TempDir(), fmt.Sprintf("atomic-queue-%d", os.Getuid()), "atomic-queue.sock"))
-	return paths
+	return current
 }
 
-func resolveSocketPath(candidates []string) string {
-	for _, candidate := range candidates {
-		if socketPathUsable(candidate) {
-			return candidate
-		}
+func socketSuggestion(current string) string {
+	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
+	if runtimeDir == "" {
+		return ""
 	}
-	return candidates[0]
-}
-
-func socketPathUsable(path string) bool {
-	info, err := os.Stat(path)
-	switch {
-	case err == nil:
-		return info.Mode()&os.ModeSocket != 0
-	case errors.Is(err, os.ErrNotExist):
-		return dirCreatable(filepath.Dir(path))
-	default:
-		return false
+	hint := filepath.Join(runtimeDir, "atomic-queue", "atomic-queue.sock")
+	if hint == current {
+		return ""
 	}
-}
-
-func dirCreatable(dir string) bool {
-	for {
-		if dir == "" {
-			return false
-		}
-		info, err := os.Stat(dir)
-		switch {
-		case err == nil:
-			if !info.IsDir() {
-				return false
-			}
-			return syscall.Access(dir, accessWrite) == nil
-		case errors.Is(err, os.ErrNotExist):
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				return false
-			}
-			dir = parent
-		default:
-			return false
-		}
-	}
+	return hint
 }
 
 func usageError(cmd string, err error) int {

@@ -80,6 +80,21 @@ Use custom channels and timeouts:
 ./atomic-queue stress --duration 15s --threads 400 --channels jobs,fast,slow --pop-timeout 100ms
 ```
 
+Observed on this machine:
+
+```text
+❯ ./atomic-queue stress --duration 10s --threads 1000
+stress duration: 10.007s
+threads: 1000 (500 producers, 500 consumers)
+channels: stress-a, stress-b, stress-c, stress-d
+messages pushed: 629678
+messages served: 627577
+pop timeouts: 0
+client failures: 0
+push rate: 62922.32 msg/s
+serve rate: 62712.37 msg/s
+```
+
 Start the daemon explicitly instead of relying on auto-start:
 
 ```bash
@@ -96,10 +111,8 @@ ATOMIC_QUEUE_SOCKET=/tmp/atomic-queue.sock ./atomic-queue pop jobs
 Default socket:
 
 ```text
-/run/$USER-atomic-queue.sock
+/run/user/$UID/atomic-queue/atomic-queue.sock
 ```
-
-If `/run/$USER-atomic-queue.sock` is not usable for the current user, the CLI falls back to a user-writable runtime path such as `$XDG_RUNTIME_DIR/atomic-queue/atomic-queue.sock`.
 
 Read a raw message into shell:
 
