@@ -67,8 +67,8 @@ Start the daemon explicitly:
 
 ```bash
 atomic-queue serve
-atomic-queue serve --max-queued-bytes 8589934592      # 8 GiB cap (flag)
-ATOMIC_QUEUE_MAX_QUEUED_BYTES=8589934592 atomic-queue serve  # same, via env
+atomic-queue serve --max-queued-gbytes 8           # 8 GiB cap (flag)
+ATOMIC_QUEUE_MAX_QUEUED_GBYTES=8 atomic-queue serve  # same, via env
 ```
 
 The daemon enforces a total queued-bytes cap (default `4 GiB`). When a
@@ -171,7 +171,7 @@ $XDG_RUNTIME_DIR/atomic-queue/atomic-queue.sock
 - In-memory only; messages are lost if the daemon exits or the machine reboots.
 - Maximum payload size is `256 MiB`.
 - The wire protocol length field allows much larger frames, but `atomic-queue` intentionally keeps the daemon bounded with a `256 MiB` payload limit.
-- Total queued bytes are capped daemon-wide (default `4 GiB`, `--max-queued-bytes` overrides). Pushes block when full and resume as consumers drain.
+- Total queued bytes are capped daemon-wide (default `4 GiB`, `--max-queued-gbytes N` or `ATOMIC_QUEUE_MAX_QUEUED_GBYTES=N` overrides; integer GiB, minimum `1`). Pushes block when full and resume as consumers drain.
 - Channel names are limited to `[A-Za-z0-9._-]` and max length `128`.
 - If several requested channels already have queued data, `pop` checks them in the order you passed.
 

@@ -26,8 +26,9 @@ const (
 	exitRuntime           = 1
 	exitTimeout           = 2
 	exitUsage             = 64
-	defaultMaxBytes       = 256 << 20
-	defaultMaxQueuedBytes = int64(4) << 30
+	defaultMaxBytes        = 256 << 20
+	defaultMaxQueuedGBytes = int64(4)
+	defaultMaxQueuedBytes  = defaultMaxQueuedGBytes << 30
 	clientDialTimeout     = 200 * time.Millisecond
 	daemonStartTimeout    = 2 * time.Second
 	socketProbeDelay      = 50 * time.Millisecond
@@ -493,7 +494,7 @@ func usageError(cmd string, err error) int {
 	case "pop":
 		fmt.Fprintln(os.Stderr, "usage: atomic-queue pop [--socket path] [--timeout d] channel...")
 	case "serve":
-		fmt.Fprintln(os.Stderr, "usage: atomic-queue serve [--socket path] [--max-queued-bytes N]")
+		fmt.Fprintln(os.Stderr, "usage: atomic-queue serve [--socket path] [--max-queued-gbytes N]")
 	case "stress":
 		fmt.Fprintln(os.Stderr, "usage: atomic-queue stress [--socket path] [--duration 10s] [--threads 1000] [--publishers n] [--consumers n] [--channels a,b,c] [--pop-timeout 200ms] [--payload-size 128] [--format text|json]")
 	}
@@ -530,7 +531,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "")
 	fmt.Fprintf(w, "Default socket: %s\n", defaultSocketPath())
 	fmt.Fprintln(w, "Override socket: ATOMIC_QUEUE_SOCKET=/path/to.sock or --socket /path/to.sock")
-	fmt.Fprintln(w, "Override queue cap: ATOMIC_QUEUE_MAX_QUEUED_BYTES=<bytes> or --max-queued-bytes <bytes>")
+	fmt.Fprintln(w, "Override queue cap: ATOMIC_QUEUE_MAX_QUEUED_GBYTES=<GiB> or --max-queued-gbytes <GiB>")
 	fmt.Fprintln(w, "GitHub: https://github.com/parf/atomic-queue")
 }
 
@@ -580,13 +581,13 @@ func newBlockNotifier() func(channel string, queuedBytes, maxQueuedBytes int64) 
 
 func parseServeArgs(args []string) (string, int64, error) {
 	socket := defaultSocketPath()
-	maxQueuedBytes := defaultMaxQueuedBytes
-	if env := os.Getenv("ATOMIC_QUEUE_MAX_QUEUED_BYTES"); env != "" {
-		n, err := parsePositiveInt64(env, "ATOMIC_QUEUE_MAX_QUEUED_BYTES")
+	gbytes := defaultMaxQueuedGBytes
+	if env := os.Getenv("ATOMIC_QUEUE_MAX_QUEUED_GBYTES"); env != "" {
+		n, err := parsePositiveInt64(env, "ATOMIC_QUEUE_MAX_QUEUED_GBYTES")
 		if err != nil {
 			return "", 0, err
 		}
-		maxQueuedBytes = n
+		gbytes = n
 	}
 
 	for i := 0; i < len(args); i++ {
@@ -600,30 +601,31 @@ func parseServeArgs(args []string) (string, int64, error) {
 			i++
 		case hasLongOption(arg, "--socket"):
 			socket, _ = trimOption(arg, "--socket")
-		case arg == "--max-queued-bytes":
+		case arg == "--max-queued-gbytes":
 			if i+1 >= len(args) {
-				return "", 0, errors.New("missing value for --max-queued-bytes")
+				return "", 0, errors.New("missing value for --max-queued-gbytes")
 			}
-			n, err := parsePositiveInt64(args[i+1], "max-queued-bytes")
+			n, err := parsePositiveInt64(args[i+1], "max-queued-gbytes")
 			if err != nil {
 				return "", 0, err
 			}
-			maxQueuedBytes = n
+			gbytes = n
 			i++
-		case hasLongOption(arg, "--max-queued-bytes"):
-			value, _ := trimOption(arg, "--max-queued-bytes")
-			n, err := parsePositiveInt64(value, "max-queued-bytes")
+		case hasLongOption(arg, "--max-queued-gbytes"):
+			value, _ := trimOption(arg, "--max-queued-gbytes")
+			n, err := parsePositiveInt64(value, "max-queued-gbytes")
 			if err != nil {
 				return "", 0, err
 			}
-			maxQueuedBytes = n
+			gbytes = n
 		default:
 			return "", 0, fmt.Errorf("unknown serve option %q", arg)
 		}
 	}
 
+	maxQueuedBytes := gbytes << 30
 	if maxQueuedBytes < int64(defaultMaxBytes) {
-		return "", 0, fmt.Errorf("--max-queued-bytes must be >= %d (per-message max)", defaultMaxBytes)
+		return "", 0, fmt.Errorf("--max-queued-gbytes must be >= 1 (per-message cap is %d bytes)", defaultMaxBytes)
 	}
 	return socket, maxQueuedBytes, nil
 }
