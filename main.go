@@ -12,20 +12,22 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 )
 
 const (
-	exitOK             = 0
-	exitRuntime        = 1
-	exitTimeout        = 2
-	exitUsage          = 64
-	defaultMaxBytes    = 256 << 20
-	clientDialTimeout  = 200 * time.Millisecond
-	daemonStartTimeout = 2 * time.Second
-	socketProbeDelay   = 50 * time.Millisecond
+	exitOK                = 0
+	exitRuntime           = 1
+	exitTimeout           = 2
+	exitUsage             = 64
+	defaultMaxBytes       = 256 << 20
+	defaultMaxQueuedBytes = int64(4) << 30
+	clientDialTimeout     = 200 * time.Millisecond
+	daemonStartTimeout    = 2 * time.Second
+	socketProbeDelay      = 50 * time.Millisecond
 )
 
 var channelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
@@ -160,15 +162,12 @@ func runPop(args []string) int {
 }
 
 func runServe(args []string) int {
-	socket, positionals, err := parseArgs(args, false)
+	socket, maxQueuedBytes, err := parseServeArgs(args)
 	if err != nil {
 		return usageError("serve", err)
 	}
-	if len(positionals) != 0 {
-		return usageError("serve", errors.New("usage: atomic-queue serve [--socket path]"))
-	}
 
-	if err := serve(socket); err != nil {
+	if err := serve(socket, maxQueuedBytes); err != nil {
 		if hint := socketSuggestion(socket); hint != "" {
 			return runtimeError(fmt.Errorf("%w\ntry:\n  atomic-queue serve --socket %q\nor:\n  ATOMIC_QUEUE_SOCKET=%q atomic-queue serve", err, hint, hint))
 		}
@@ -177,7 +176,7 @@ func runServe(args []string) int {
 	return exitOK
 }
 
-func serve(socketPath string) error {
+func serve(socketPath string, maxQueuedBytes int64) error {
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
 		return fmt.Errorf("create socket dir: %w", err)
 	}
@@ -198,7 +197,7 @@ func serve(socketPath string) error {
 		return fmt.Errorf("chmod socket: %w", err)
 	}
 
-	broker := NewBroker(defaultMaxBytes)
+	broker := NewBroker(defaultMaxBytes, maxQueuedBytes)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -216,11 +215,11 @@ func serve(socketPath string) error {
 			}
 			return fmt.Errorf("accept: %w", err)
 		}
-		go handleConn(conn, broker)
+		go handleConn(ctx, conn, broker)
 	}
 }
 
-func handleConn(conn net.Conn, broker *Broker) {
+func handleConn(ctx context.Context, conn net.Conn, broker *Broker) {
 	defer conn.Close()
 
 	reader := bufio.NewReader(conn)
@@ -242,7 +241,7 @@ func handleConn(conn net.Conn, broker *Broker) {
 				_ = writeResponse(writer, response{Error: "push requires exactly one channel"})
 				return
 			}
-			if err := broker.PushOwned(req.Channels[0], req.Payload); err != nil {
+			if err := broker.PushOwned(ctx, req.Channels[0], req.Payload); err != nil {
 				_ = writeResponse(writer, response{Error: err.Error()})
 				return
 			}
@@ -471,7 +470,7 @@ func usageError(cmd string, err error) int {
 	case "pop":
 		fmt.Fprintln(os.Stderr, "usage: atomic-queue pop [--socket path] [--timeout d] channel...")
 	case "serve":
-		fmt.Fprintln(os.Stderr, "usage: atomic-queue serve [--socket path]")
+		fmt.Fprintln(os.Stderr, "usage: atomic-queue serve [--socket path] [--max-queued-bytes N]")
 	case "stress":
 		fmt.Fprintln(os.Stderr, "usage: atomic-queue stress [--socket path] [--duration 10s] [--threads 1000] [--publishers n] [--consumers n] [--channels a,b,c] [--pop-timeout 200ms] [--payload-size 128] [--format text|json]")
 	}
@@ -509,6 +508,60 @@ func printUsage(w io.Writer) {
 	fmt.Fprintf(w, "Default socket: %s\n", defaultSocketPath())
 	fmt.Fprintln(w, "Override socket: ATOMIC_QUEUE_SOCKET=/path/to.sock or --socket /path/to.sock")
 	fmt.Fprintln(w, "GitHub: https://github.com/parf/atomic-queue")
+}
+
+func parseServeArgs(args []string) (string, int64, error) {
+	socket := defaultSocketPath()
+	maxQueuedBytes := defaultMaxQueuedBytes
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--socket":
+			if i+1 >= len(args) {
+				return "", 0, errors.New("missing value for --socket")
+			}
+			socket = args[i+1]
+			i++
+		case hasLongOption(arg, "--socket"):
+			socket, _ = trimOption(arg, "--socket")
+		case arg == "--max-queued-bytes":
+			if i+1 >= len(args) {
+				return "", 0, errors.New("missing value for --max-queued-bytes")
+			}
+			n, err := parsePositiveInt64(args[i+1], "max-queued-bytes")
+			if err != nil {
+				return "", 0, err
+			}
+			maxQueuedBytes = n
+			i++
+		case hasLongOption(arg, "--max-queued-bytes"):
+			value, _ := trimOption(arg, "--max-queued-bytes")
+			n, err := parsePositiveInt64(value, "max-queued-bytes")
+			if err != nil {
+				return "", 0, err
+			}
+			maxQueuedBytes = n
+		default:
+			return "", 0, fmt.Errorf("unknown serve option %q", arg)
+		}
+	}
+
+	if maxQueuedBytes < int64(defaultMaxBytes) {
+		return "", 0, fmt.Errorf("--max-queued-bytes must be >= %d (per-message max)", defaultMaxBytes)
+	}
+	return socket, maxQueuedBytes, nil
+}
+
+func parsePositiveInt64(value, name string) (int64, error) {
+	n, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %w", name, err)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("%s must be > 0", name)
+	}
+	return n, nil
 }
 
 func parsePushArgs(args []string) (string, []string, bool, error) {

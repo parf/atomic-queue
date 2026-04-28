@@ -10,12 +10,12 @@ import (
 )
 
 func TestBrokerFIFO(t *testing.T) {
-	b := NewBroker(defaultMaxBytes)
+	b := NewBroker(defaultMaxBytes, defaultMaxQueuedBytes)
 
-	if err := b.Push("jobs", []byte(`{"n":1}`)); err != nil {
+	if err := b.Push(context.Background(), "jobs", []byte(`{"n":1}`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.Push("jobs", []byte(`{"n":2}`)); err != nil {
+	if err := b.Push(context.Background(), "jobs", []byte(`{"n":2}`)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -37,7 +37,7 @@ func TestBrokerFIFO(t *testing.T) {
 }
 
 func TestBrokerMultiChannelWait(t *testing.T) {
-	b := NewBroker(defaultMaxBytes)
+	b := NewBroker(defaultMaxBytes, defaultMaxQueuedBytes)
 
 	done := make(chan delivery, 1)
 	go func() {
@@ -52,7 +52,7 @@ func TestBrokerMultiChannelWait(t *testing.T) {
 	}()
 
 	time.Sleep(50 * time.Millisecond)
-	if err := b.Push("beta", []byte(`{"ok":true}`)); err != nil {
+	if err := b.Push(context.Background(), "beta", []byte(`{"ok":true}`)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -67,7 +67,7 @@ func TestBrokerMultiChannelWait(t *testing.T) {
 }
 
 func TestBrokerConcurrentSingleDelivery(t *testing.T) {
-	b := NewBroker(defaultMaxBytes)
+	b := NewBroker(defaultMaxBytes, defaultMaxQueuedBytes)
 	const count = 50
 
 	type result struct {
@@ -94,7 +94,7 @@ func TestBrokerConcurrentSingleDelivery(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 	for i := 0; i < count; i++ {
-		if err := b.Push("shared", []byte(fmt.Sprintf(`{"id":%d}`, i))); err != nil {
+		if err := b.Push(context.Background(), "shared", []byte(fmt.Sprintf(`{"id":%d}`, i))); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -121,7 +121,7 @@ func TestBrokerConcurrentSingleDelivery(t *testing.T) {
 }
 
 func TestBrokerTimeout(t *testing.T) {
-	b := NewBroker(defaultMaxBytes)
+	b := NewBroker(defaultMaxBytes, defaultMaxQueuedBytes)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
@@ -132,9 +132,9 @@ func TestBrokerTimeout(t *testing.T) {
 }
 
 func TestBrokerAllowsPlainStringPayload(t *testing.T) {
-	b := NewBroker(defaultMaxBytes)
+	b := NewBroker(defaultMaxBytes, defaultMaxQueuedBytes)
 
-	if err := b.Push("logs", []byte("plain text line")); err != nil {
+	if err := b.Push(context.Background(), "logs", []byte("plain text line")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -151,10 +151,10 @@ func TestBrokerAllowsPlainStringPayload(t *testing.T) {
 }
 
 func TestBrokerAllowsBinaryPayload(t *testing.T) {
-	b := NewBroker(defaultMaxBytes)
+	b := NewBroker(defaultMaxBytes, defaultMaxQueuedBytes)
 	payload := []byte{0x00, 0x01, 0x02, 0xff, 0x10}
 
-	if err := b.Push("bin", payload); err != nil {
+	if err := b.Push(context.Background(), "bin", payload); err != nil {
 		t.Fatal(err)
 	}
 
@@ -175,7 +175,7 @@ func TestBrokerStressMultiProducerMultiConsumer(t *testing.T) {
 		t.Skip("skipping stress test in short mode")
 	}
 
-	b := NewBroker(defaultMaxBytes)
+	b := NewBroker(defaultMaxBytes, defaultMaxQueuedBytes)
 
 	channels := []string{"alpha", "beta", "gamma", "delta"}
 	producersPerChannel := 8
@@ -217,7 +217,7 @@ func TestBrokerStressMultiProducerMultiConsumer(t *testing.T) {
 				defer producerWG.Done()
 				for seq := 0; seq < messagesPerProducer; seq++ {
 					payload := fmt.Sprintf("%s:%02d:%03d", channel, producerID, seq)
-					if err := b.Push(channel, []byte(payload)); err != nil {
+					if err := b.Push(context.Background(), channel, []byte(payload)); err != nil {
 						errs <- err
 						return
 					}
@@ -271,5 +271,157 @@ func TestBrokerStressMultiProducerMultiConsumer(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestBrokerPushBlocksAtCap(t *testing.T) {
+	b := NewBroker(defaultMaxBytes, 200)
+
+	if err := b.Push(context.Background(), "ch", make([]byte, 100)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Push(context.Background(), "ch", make([]byte, 100)); err != nil {
+		t.Fatal(err)
+	}
+
+	pushDone := make(chan error, 1)
+	go func() {
+		pushDone <- b.Push(context.Background(), "ch", make([]byte, 50))
+	}()
+
+	select {
+	case err := <-pushDone:
+		t.Fatalf("expected push to block, got %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	popCtx, popCancel := context.WithTimeout(context.Background(), time.Second)
+	defer popCancel()
+	if _, err := b.Pop(popCtx, []string{"ch"}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-pushDone:
+		if err != nil {
+			t.Fatalf("blocked push failed after pop: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("push did not unblock after pop")
+	}
+}
+
+func TestBrokerPushCancelDuringWait(t *testing.T) {
+	b := NewBroker(defaultMaxBytes, 100)
+	if err := b.Push(context.Background(), "ch", make([]byte, 100)); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := b.Push(ctx, "ch", make([]byte, 50))
+	if err != ErrTimeout {
+		t.Fatalf("expected ErrTimeout, got %v", err)
+	}
+}
+
+func TestBrokerPushImmediateCancelWhenFull(t *testing.T) {
+	b := NewBroker(defaultMaxBytes, 100)
+	if err := b.Push(context.Background(), "ch", make([]byte, 100)); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := b.Push(ctx, "ch", make([]byte, 50))
+	if err != ErrTimeout {
+		t.Fatalf("expected ErrTimeout, got %v", err)
+	}
+}
+
+func TestBrokerWaiterHandoffSkipsAccounting(t *testing.T) {
+	b := NewBroker(defaultMaxBytes, 100)
+
+	received := make(chan delivery, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		msg, err := b.Pop(ctx, []string{"ch"})
+		if err != nil {
+			t.Errorf("pop failed: %v", err)
+			return
+		}
+		received <- msg
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	if err := b.Push(context.Background(), "ch", make([]byte, 200)); err != nil {
+		t.Fatalf("waiter handoff push failed: %v", err)
+	}
+
+	select {
+	case msg := <-received:
+		if len(msg.Payload) != 200 {
+			t.Fatalf("expected 200-byte payload, got %d", len(msg.Payload))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waiter never received message")
+	}
+
+	b.mu.Lock()
+	queued := b.queuedBytes
+	b.mu.Unlock()
+	if queued != 0 {
+		t.Fatalf("waiter handoff must not count toward queuedBytes, got %d", queued)
+	}
+}
+
+func TestBrokerConcurrentPushersAtCap(t *testing.T) {
+	b := NewBroker(defaultMaxBytes, 1024)
+
+	const pushers = 20
+	const payloadSize = 256
+	const messagesPerPusher = 50
+
+	var pushWG sync.WaitGroup
+	for i := 0; i < pushers; i++ {
+		pushWG.Add(1)
+		go func(id int) {
+			defer pushWG.Done()
+			for j := 0; j < messagesPerPusher; j++ {
+				payload := make([]byte, payloadSize)
+				payload[0] = byte(id)
+				if err := b.Push(context.Background(), "ch", payload); err != nil {
+					t.Errorf("push failed: %v", err)
+					return
+				}
+			}
+		}(i)
+	}
+
+	totalMessages := pushers * messagesPerPusher
+	for received := 0; received < totalMessages; received++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := b.Pop(ctx, []string{"ch"})
+		cancel()
+		if err != nil {
+			t.Fatalf("pop %d failed: %v", received, err)
+		}
+
+		b.mu.Lock()
+		queued := b.queuedBytes
+		b.mu.Unlock()
+		if queued > 1024 {
+			t.Fatalf("queuedBytes exceeded cap: %d > 1024", queued)
+		}
+	}
+	pushWG.Wait()
+
+	b.mu.Lock()
+	finalQueued := b.queuedBytes
+	b.mu.Unlock()
+	if finalQueued != 0 {
+		t.Fatalf("queuedBytes should be 0 after draining, got %d", finalQueued)
 	}
 }

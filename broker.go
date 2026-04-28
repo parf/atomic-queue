@@ -22,28 +22,33 @@ type waiter struct {
 }
 
 type Broker struct {
-	mu       sync.Mutex
-	queues   map[string][][]byte
-	waiters  []*waiter
-	maxBytes int
+	mu             sync.Mutex
+	queues         map[string][][]byte
+	waiters        []*waiter
+	maxBytes       int
+	queuedBytes    int64
+	maxQueuedBytes int64
+	drainSignal    chan struct{}
 }
 
-func NewBroker(maxBytes int) *Broker {
+func NewBroker(maxBytes int, maxQueuedBytes int64) *Broker {
 	return &Broker{
-		queues:   make(map[string][][]byte),
-		maxBytes: maxBytes,
+		queues:         make(map[string][][]byte),
+		maxBytes:       maxBytes,
+		maxQueuedBytes: maxQueuedBytes,
+		drainSignal:    make(chan struct{}),
 	}
 }
 
-func (b *Broker) Push(channel string, payload []byte) error {
-	return b.push(channel, payload, true)
+func (b *Broker) Push(ctx context.Context, channel string, payload []byte) error {
+	return b.push(ctx, channel, payload, true)
 }
 
-func (b *Broker) PushOwned(channel string, payload []byte) error {
-	return b.push(channel, payload, false)
+func (b *Broker) PushOwned(ctx context.Context, channel string, payload []byte) error {
+	return b.push(ctx, channel, payload, false)
 }
 
-func (b *Broker) push(channel string, payload []byte, clonePayload bool) error {
+func (b *Broker) push(ctx context.Context, channel string, payload []byte, clonePayload bool) error {
 	if err := validateChannel(channel); err != nil {
 		return err
 	}
@@ -53,20 +58,37 @@ func (b *Broker) push(channel string, payload []byte, clonePayload bool) error {
 	if clonePayload {
 		payload = slices.Clone(payload)
 	}
+	size := int64(len(payload))
 
 	b.mu.Lock()
-	for i, w := range b.waiters {
-		if !waiterMatches(w, channel) {
-			continue
+	for {
+		for i, w := range b.waiters {
+			if !waiterMatches(w, channel) {
+				continue
+			}
+
+			b.removeWaiterAtLocked(i)
+			b.mu.Unlock()
+			w.reply <- delivery{Channel: channel, Payload: payload}
+			return nil
 		}
 
-		b.removeWaiterAtLocked(i)
+		if b.queuedBytes+size <= b.maxQueuedBytes {
+			break
+		}
+
+		sig := b.drainSignal
 		b.mu.Unlock()
-		w.reply <- delivery{Channel: channel, Payload: payload}
-		return nil
+		select {
+		case <-sig:
+		case <-ctx.Done():
+			return timeoutFromContext(ctx.Err())
+		}
+		b.mu.Lock()
 	}
 
 	b.queues[channel] = append(b.queues[channel], payload)
+	b.queuedBytes += size
 	b.mu.Unlock()
 	return nil
 }
@@ -132,6 +154,9 @@ func (b *Broker) popQueuedLocked(channels []string) (delivery, bool) {
 		} else {
 			b.queues[channel] = queue[1:]
 		}
+		b.queuedBytes -= int64(len(payload))
+		close(b.drainSignal)
+		b.drainSignal = make(chan struct{})
 		return delivery{Channel: channel, Payload: payload}, true
 	}
 	return delivery{}, false
