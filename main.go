@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/syslog"
 	"net"
 	"os"
 	"os/exec"
@@ -14,6 +15,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -198,6 +201,7 @@ func serve(socketPath string, maxQueuedBytes int64) error {
 	}
 
 	broker := NewBroker(defaultMaxBytes, maxQueuedBytes)
+	broker.SetOnBlock(newBlockNotifier())
 
 	watcher, err := newConnWatcher()
 	if err != nil {
@@ -527,6 +531,50 @@ func printUsage(w io.Writer) {
 	fmt.Fprintf(w, "Default socket: %s\n", defaultSocketPath())
 	fmt.Fprintln(w, "Override socket: ATOMIC_QUEUE_SOCKET=/path/to.sock or --socket /path/to.sock")
 	fmt.Fprintln(w, "GitHub: https://github.com/parf/atomic-queue")
+}
+
+// newBlockNotifier returns an onBlock callback that emits a syslog
+// notice each time a push has to wait for queue capacity, rate-limited
+// to one notice per 10 seconds across the whole daemon. The syslog
+// connection is opened lazily on first invocation; if it fails (no
+// /dev/log, no syslogd running, etc.) the notifier silently degrades
+// to a no-op so the daemon keeps running.
+func newBlockNotifier() func(channel string, queuedBytes, maxQueuedBytes int64) {
+	const minInterval = int64(10 * time.Second)
+	var (
+		lastNs    atomic.Int64
+		writerMu  sync.Mutex
+		writerSet bool
+		writer    *syslog.Writer
+	)
+	return func(channel string, queuedBytes, maxQueuedBytes int64) {
+		now := time.Now().UnixNano()
+		prev := lastNs.Load()
+		if prev != 0 && now-prev < minInterval {
+			return
+		}
+		if !lastNs.CompareAndSwap(prev, now) {
+			return
+		}
+
+		writerMu.Lock()
+		if !writerSet {
+			w, err := syslog.New(syslog.LOG_NOTICE|syslog.LOG_DAEMON, "atomic-queue")
+			if err == nil {
+				writer = w
+			}
+			writerSet = true
+		}
+		w := writer
+		writerMu.Unlock()
+		if w == nil {
+			return
+		}
+		_ = w.Notice(fmt.Sprintf(
+			"push blocked: channel=%q queued=%d/%d bytes (waiting for consumer)",
+			channel, queuedBytes, maxQueuedBytes,
+		))
+	}
 }
 
 func parseServeArgs(args []string) (string, int64, error) {

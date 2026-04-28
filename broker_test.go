@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -374,6 +375,90 @@ func TestBrokerWaiterHandoffSkipsAccounting(t *testing.T) {
 	b.mu.Unlock()
 	if queued != 0 {
 		t.Fatalf("waiter handoff must not count toward queuedBytes, got %d", queued)
+	}
+}
+
+func TestBrokerOnBlockFiresWhenWaiting(t *testing.T) {
+	b := NewBroker(defaultMaxBytes, 100)
+
+	var (
+		mu       sync.Mutex
+		calls    int
+		seenChan string
+		seenMax  int64
+	)
+	b.SetOnBlock(func(channel string, queued, max int64) {
+		mu.Lock()
+		calls++
+		seenChan = channel
+		seenMax = max
+		mu.Unlock()
+	})
+
+	if err := b.Push(context.Background(), "ch", make([]byte, 100)); err != nil {
+		t.Fatal(err)
+	}
+
+	pushDone := make(chan error, 1)
+	go func() {
+		pushDone <- b.Push(context.Background(), "ch", make([]byte, 50))
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	gotCalls := calls
+	gotChan := seenChan
+	gotMax := seenMax
+	mu.Unlock()
+	if gotCalls < 1 {
+		t.Fatalf("expected onBlock to fire at least once, got %d", gotCalls)
+	}
+	if gotChan != "ch" {
+		t.Fatalf("expected channel %q, got %q", "ch", gotChan)
+	}
+	if gotMax != 100 {
+		t.Fatalf("expected max=100, got %d", gotMax)
+	}
+
+	popCtx, popCancel := context.WithTimeout(context.Background(), time.Second)
+	defer popCancel()
+	if _, err := b.Pop(popCtx, []string{"ch"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-pushDone; err != nil {
+		t.Fatalf("blocked push failed after pop: %v", err)
+	}
+}
+
+func TestBrokerOnBlockNotCalledOnWaiterHandoff(t *testing.T) {
+	b := NewBroker(defaultMaxBytes, 100)
+	var calls atomic.Int64
+	b.SetOnBlock(func(string, int64, int64) {
+		calls.Add(1)
+	})
+
+	received := make(chan delivery, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		msg, err := b.Pop(ctx, []string{"ch"})
+		if err != nil {
+			t.Errorf("pop failed: %v", err)
+			return
+		}
+		received <- msg
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	if err := b.Push(context.Background(), "ch", make([]byte, 200)); err != nil {
+		t.Fatal(err)
+	}
+	<-received
+
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("onBlock must not fire on waiter handoff, got %d calls", got)
 	}
 }
 

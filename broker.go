@@ -29,6 +29,15 @@ type Broker struct {
 	queuedBytes    int64
 	maxQueuedBytes int64
 	drainSignal    chan struct{}
+	onBlock        func(channel string, queuedBytes, maxQueuedBytes int64)
+}
+
+// SetOnBlock installs a callback invoked each time a Push has to wait
+// for queue capacity. The callback is invoked outside the broker
+// mutex; it must not block. Set once before serving — the field is
+// not goroutine-safe to mutate after Push calls begin.
+func (b *Broker) SetOnBlock(fn func(channel string, queuedBytes, maxQueuedBytes int64)) {
+	b.onBlock = fn
 }
 
 func NewBroker(maxBytes int, maxQueuedBytes int64) *Broker {
@@ -78,7 +87,13 @@ func (b *Broker) push(ctx context.Context, channel string, payload []byte, clone
 		}
 
 		sig := b.drainSignal
+		queued := b.queuedBytes
+		max := b.maxQueuedBytes
+		notify := b.onBlock
 		b.mu.Unlock()
+		if notify != nil {
+			notify(channel, queued, max)
+		}
 		select {
 		case <-sig:
 		case <-ctx.Done():
