@@ -199,6 +199,13 @@ func serve(socketPath string, maxQueuedBytes int64) error {
 
 	broker := NewBroker(defaultMaxBytes, maxQueuedBytes)
 
+	watcher, err := newConnWatcher()
+	if err != nil {
+		return fmt.Errorf("conn watcher: %w", err)
+	}
+	defer watcher.close()
+	go watcher.run()
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -215,12 +222,24 @@ func serve(socketPath string, maxQueuedBytes int64) error {
 			}
 			return fmt.Errorf("accept: %w", err)
 		}
-		go handleConn(ctx, conn, broker)
+		go handleConn(ctx, watcher, conn, broker)
 	}
 }
 
-func handleConn(ctx context.Context, conn net.Conn, broker *Broker) {
+func handleConn(serverCtx context.Context, watcher *connWatcher, conn net.Conn, broker *Broker) {
+	connCtx, cancel := context.WithCancel(serverCtx)
+	defer cancel()
 	defer conn.Close()
+
+	// Register epoll watch AFTER deferring conn.Close() so the unregister
+	// defer runs first (LIFO), guaranteeing we deregister the fd while
+	// it is still valid and not yet reusable by the kernel.
+	fd, fdErr := connFD(conn)
+	if fdErr == nil {
+		if err := watcher.register(fd, cancel); err == nil {
+			defer watcher.unregister(fd)
+		}
+	}
 
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
@@ -241,7 +260,7 @@ func handleConn(ctx context.Context, conn net.Conn, broker *Broker) {
 				_ = writeResponse(writer, response{Error: "push requires exactly one channel"})
 				return
 			}
-			if err := broker.PushOwned(ctx, req.Channels[0], req.Payload); err != nil {
+			if err := broker.PushOwned(connCtx, req.Channels[0], req.Payload); err != nil {
 				_ = writeResponse(writer, response{Error: err.Error()})
 				return
 			}
