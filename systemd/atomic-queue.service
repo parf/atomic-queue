@@ -4,6 +4,9 @@ After=default.target
 
 [Service]
 Type=simple
+# Total in-memory queue cap (bytes). Defaults to 4 GiB if unset; must be
+# >= per-message cap (256 MiB). Override here or via systemd drop-in.
+Environment=ATOMIC_QUEUE_MAX_QUEUED_BYTES=4294967296
 ExecStart=%h/src/atomic-queue/atomic-queue serve --socket %t/atomic-queue/atomic-queue.sock
 Restart=on-failure
 RestartSec=1
