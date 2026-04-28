@@ -530,6 +530,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "")
 	fmt.Fprintf(w, "Default socket: %s\n", defaultSocketPath())
 	fmt.Fprintln(w, "Override socket: ATOMIC_QUEUE_SOCKET=/path/to.sock or --socket /path/to.sock")
+	fmt.Fprintln(w, "Override queue cap: ATOMIC_QUEUE_MAX_QUEUED_BYTES=<bytes> or --max-queued-bytes <bytes>")
 	fmt.Fprintln(w, "GitHub: https://github.com/parf/atomic-queue")
 }
 
@@ -580,6 +581,13 @@ func newBlockNotifier() func(channel string, queuedBytes, maxQueuedBytes int64) 
 func parseServeArgs(args []string) (string, int64, error) {
 	socket := defaultSocketPath()
 	maxQueuedBytes := defaultMaxQueuedBytes
+	if env := os.Getenv("ATOMIC_QUEUE_MAX_QUEUED_BYTES"); env != "" {
+		n, err := parsePositiveInt64(env, "ATOMIC_QUEUE_MAX_QUEUED_BYTES")
+		if err != nil {
+			return "", 0, err
+		}
+		maxQueuedBytes = n
+	}
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]

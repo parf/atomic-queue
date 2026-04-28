@@ -67,7 +67,8 @@ Start the daemon explicitly:
 
 ```bash
 atomic-queue serve
-atomic-queue serve --max-queued-bytes 8589934592   # 8 GiB cap
+atomic-queue serve --max-queued-bytes 8589934592      # 8 GiB cap (flag)
+ATOMIC_QUEUE_MAX_QUEUED_BYTES=8589934592 atomic-queue serve  # same, via env
 ```
 
 The daemon enforces a total queued-bytes cap (default `4 GiB`). When a
